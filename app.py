@@ -7,16 +7,16 @@ PORT = int(os.environ.get("PORT", 10000))
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Бот работает на Render (чистый webhook)!")
+    await update.message.reply_text("✅ Бот работает стабильно!")
 
 def main():
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
 
-    application.run_webhook(
+    app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        webhook_url=f"{RENDER_EXTERNAL_URL}/{TOKEN}",
+        webhook_url=f"{RENDER_EXTERNAL_URL}/{TOKEN}"
     )
 
 if __name__ == "__main__":
