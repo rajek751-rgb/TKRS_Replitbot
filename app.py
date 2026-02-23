@@ -1,38 +1,23 @@
 import os
-from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 PORT = int(os.environ.get("PORT", 10000))
 
-app = Flask(__name__)
-application = Application.builder().token(TOKEN).build()
-
-
-# ====== TELEGRAM COMMAND ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Бот работает на Render!")
+    await update.message.reply_text("✅ Бот работает на Render (Webhook mode)!")
 
+def main():
+    application = Application.builder().token(TOKEN).build()
 
-application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("start", start))
 
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=f"https://tkrs-bot.onrender.com/{TOKEN}",
+    )
 
-# ====== WEBHOOK ======
-@app.route(f"/{TOKEN}", methods=["POST"])
-async def webhook():
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    await application.process_update(update)
-    return "ok"
-
-
-@app.route("/")
-def home():
-    return "Bot is running"
-
-
-# ====== START SERVER ======
 if __name__ == "__main__":
-    application.initialize()
-    application.start()
-    app.run(host="0.0.0.0", port=PORT)
+    main()
