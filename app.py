@@ -17,16 +17,18 @@ TOKEN = TOKEN.replace("\n", "").replace("\r", "").strip()
 logging.basicConfig(level=logging.INFO)
 
 (
+    MENU,
     BRIGADE,
-    WELL,
-    FIELD,
+    OBJECT,
     SHIFT,
     NAME,
     START,
     END,
     TECH,
+    REPRESENTATIVE,
+    EQUIPMENT,
     ACTION,
-) = range(9)
+) = range(11)
 
 TECH_LIST = [
     "ЦА","АЦН-10","АКН","АХО","ППУ","Цементосмеситель",
@@ -55,36 +57,31 @@ SHIFT_KEYBOARD = ReplyKeyboardMarkup(
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📊 Отчёт ТКРС\n\nНажмите начать.",
+        "📊 Отчёт ТКРС",
         reply_markup=MAIN_KEYBOARD
     )
-    return BRIGADE
+    return MENU
 
 
-# ================== БРИГАДА ==================
-
-async def brigade(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "Начать" in update.message.text:
         await update.message.reply_text("Введите номер бригады ТКРС:")
         return BRIGADE
+    return MENU
 
+
+# ================== ОБЩИЕ ДАННЫЕ ==================
+
+async def brigade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["brigade"] = update.message.text
-    await update.message.reply_text("Введите номер скважины:")
-    return WELL
+    await update.message.reply_text(
+        "Введите номер скважины и месторождение\nПример: 1256 Восточно-Сургутское"
+    )
+    return OBJECT
 
 
-# ================== СКВАЖИНА ==================
-
-async def well(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["well"] = update.message.text
-    await update.message.reply_text("Введите месторождение:")
-    return FIELD
-
-
-# ================== МЕСТОРОЖДЕНИЕ ==================
-
-async def field(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["field"] = update.message.text
+async def object_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["object"] = update.message.text
     context.user_data["operations"] = []
     await update.message.reply_text(
         "Выберите смену:",
@@ -93,7 +90,7 @@ async def field(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SHIFT
 
 
-# ================== СМЕНА ==================
+# ================== ОПЕРАЦИЯ ==================
 
 async def shift(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["current_shift"] = update.message.text
@@ -101,15 +98,11 @@ async def shift(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return NAME
 
 
-# ================== НАЗВАНИЕ ==================
-
 async def name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["current_name"] = update.message.text
     await update.message.reply_text("Введите время начала (ЧЧ:ММ):")
     return START
 
-
-# ================== НАЧАЛО ==================
 
 async def start_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["current_start"] = update.message.text
@@ -117,33 +110,58 @@ async def start_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return END
 
 
-# ================== ОКОНЧАНИЕ ==================
-
 async def end_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     end = update.message.text
     start = context.user_data["current_start"]
 
-    # автоопределение смены
     try:
-        start_time_obj = datetime.strptime(start, "%H:%M").time()
-        if start_time_obj >= datetime.strptime("08:00", "%H:%M").time() and start_time_obj < datetime.strptime("20:00", "%H:%M").time():
+        start_obj = datetime.strptime(start, "%H:%M").time()
+        if datetime.strptime("08:00", "%H:%M").time() <= start_obj < datetime.strptime("20:00", "%H:%M").time():
             auto_shift = "I смена"
         else:
             auto_shift = "II смена"
     except:
         auto_shift = context.user_data["current_shift"]
 
+    context.user_data["current_shift"] = auto_shift
+    context.user_data["current_end"] = end
+
+    keyboard = [[t] for t in TECH_LIST]
+    await update.message.reply_text(
+        "Выберите технику:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
+    return TECH
+
+
+async def tech(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["current_tech"] = update.message.text
+    await update.message.reply_text("Введите представителя заказчика (или -):")
+    return REPRESENTATIVE
+
+
+async def representative(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["current_rep"] = update.message.text
+    await update.message.reply_text("Введите оборудование и материалы (или -):")
+    return EQUIPMENT
+
+
+async def equipment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     operation = {
-        "shift": auto_shift,
+        "shift": context.user_data["current_shift"],
         "name": context.user_data["current_name"],
-        "start": start,
-        "end": end,
+        "start": context.user_data["current_start"],
+        "end": update.message.text,
+        "tech": context.user_data["current_tech"],
+        "rep": context.user_data["current_rep"],
     }
+
+    operation["equipment"] = update.message.text
 
     context.user_data["operations"].append(operation)
 
     await update.message.reply_text(
-        f"✅ Операция добавлена ({auto_shift})",
+        "✅ Операция добавлена",
         reply_markup=ACTION_KEYBOARD
     )
     return ACTION
@@ -168,17 +186,18 @@ async def action(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 ОТЧЁТ ТКРС
 
 Бригада: {context.user_data['brigade']}
-Скважина: {context.user_data['well']}
-Месторождение: {context.user_data['field']}
+Объект: {context.user_data['object']}
 
---------------------------------------------------
+------------------------------------------------------------
+№ | Смена | Начало | Конец | Операция
+------------------------------------------------------------
 """
-
-        report += "№ | Смена | Начало | Конец | Операция\n"
-        report += "--------------------------------------------------\n"
 
         for i, op in enumerate(ops, 1):
             report += f"{i} | {op['shift']} | {op['start']} | {op['end']} | {op['name']}\n"
+            report += f"    Техника: {op['tech']}\n"
+            report += f"    Представитель: {op['rep']}\n"
+            report += f"    Оборудование: {op['equipment']}\n\n"
 
         await update.message.reply_text(report)
         return ConversationHandler.END
@@ -194,13 +213,16 @@ def main():
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
+            MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, menu)],
             BRIGADE: [MessageHandler(filters.TEXT & ~filters.COMMAND, brigade)],
-            WELL: [MessageHandler(filters.TEXT & ~filters.COMMAND, well)],
-            FIELD: [MessageHandler(filters.TEXT & ~filters.COMMAND, field)],
+            OBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, object_data)],
             SHIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, shift)],
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name)],
             START: [MessageHandler(filters.TEXT & ~filters.COMMAND, start_time)],
             END: [MessageHandler(filters.TEXT & ~filters.COMMAND, end_time)],
+            TECH: [MessageHandler(filters.TEXT & ~filters.COMMAND, tech)],
+            REPRESENTATIVE: [MessageHandler(filters.TEXT & ~filters.COMMAND, representative)],
+            EQUIPMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, equipment)],
             ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, action)],
         },
         fallbacks=[],
