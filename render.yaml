@@ -1,10 +1,18 @@
 services:
-  - type: web
+  - type: worker
     name: tkrs-bot
     runtime: python
+    repo: https://github.com/yourusername/your-repo-name  # Замените на ваш репозиторий
     plan: free
+    envVars:
+      - key: BOT_TOKEN
+        sync: false  # Будет запрошено при деплое
+      - key: TELEGRAM_GROUP_ID
+        sync: false  # Будет запрошено при деплое
     buildCommand: pip install -r requirements.txt
     startCommand: python app.py
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.9
+    autoDeploy: true
+    disk:
+      name: data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
