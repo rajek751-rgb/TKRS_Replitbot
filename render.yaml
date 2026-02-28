@@ -1,5 +1,5 @@
 services:
-  - type: worker
+  - type: web
     name: tkrs-bot
     runtime: python
     repo: https://github.com/rajek751-rgb/TKRS_Replitbot.git
