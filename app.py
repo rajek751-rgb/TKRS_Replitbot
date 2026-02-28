@@ -109,14 +109,14 @@ async def send_to_group(report_id):
         current_date = None
         for op in operations:
             op_date = datetime.fromisoformat(op['operation_date']).date()
-            start = datetime.fromisoformat(op['start_time']).time() if isinstance(op['start_time'], str) else op['start_time']
-            end = datetime.fromisoformat(op['end_time']).time() if isinstance(op['end_time'], str) else op['end_time']
+            start = op['start_time']
+            end = op['end_time']
             
             if op_date != current_date:
                 current_date = op_date
                 text += f"\n📅 {op_date.strftime('%d.%m.%Y')}\n\n"
             
-            text += f"""🔹 {start.strftime('%H:%M') if hasattr(start, 'strftime') else start}–{end.strftime('%H:%M') if hasattr(end, 'strftime') else end} | {op['name']}
+            text += f"""🔹 {start}–{end} | {op['name']}
    📄 Заявка №{op['request_number']}
    🚜 {op['equipment']}
    👷 {op['representative']}
@@ -176,14 +176,14 @@ async def render_report(report_id, message):
     
     for op in operations:
         op_date = datetime.fromisoformat(op['operation_date']).date()
-        start = datetime.fromisoformat(op['start_time']).time() if isinstance(op['start_time'], str) else op['start_time']
-        end = datetime.fromisoformat(op['end_time']).time() if isinstance(op['end_time'], str) else op['end_time']
+        start = op['start_time']
+        end = op['end_time']
         
         if op_date != current_date:
             current_date = op_date
             text += f"\n📅 {op_date.strftime('%d.%m.%Y')}\n\n"
         
-        text += f"""🔹 {start.strftime('%H:%M') if hasattr(start, 'strftime') else start}–{end.strftime('%H:%M') if hasattr(end, 'strftime') else end} | {op['name']}
+        text += f"""🔹 {start}–{end} | {op['name']}
    📄 Заявка №{op['request_number']}
    🚜 {op['equipment']}
    👷 {op['representative']}
