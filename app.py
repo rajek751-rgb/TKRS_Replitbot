@@ -13,21 +13,15 @@ from telegram.ext import (
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")  # ID группы для отправки отчётов
+TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
 
 # =========================
-# FILE-BASED DATABASE
+# FILE-BASED DATABASE (без диска)
 # =========================
 
-DATA_DIR = "data"
-REPORTS_FILE = os.path.join(DATA_DIR, "reports.json")
-OPERATIONS_FILE = os.path.join(DATA_DIR, "operations.json")
-CHANGE_LOG_FILE = os.path.join(DATA_DIR, "change_log.json")
-
-def ensure_data_dir():
-    """Создаёт директорию для данных, если её нет"""
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
+REPORTS_FILE = "reports.json"
+OPERATIONS_FILE = "operations.json"
+CHANGE_LOG_FILE = "change_log.json"
 
 def load_json(file_path, default=None):
     """Загружает данные из JSON файла"""
@@ -48,9 +42,6 @@ def save_json(file_path, data):
 
 def init_db():
     """Инициализация файлового хранилища"""
-    ensure_data_dir()
-    
-    # Создаём файлы с пустыми структурами, если их нет
     if not os.path.exists(REPORTS_FILE):
         save_json(REPORTS_FILE, [])
     if not os.path.exists(OPERATIONS_FILE):
@@ -124,10 +115,8 @@ async def send_to_group(report_id):
 
 """
         
-        # Создаём клавиатуру для открытия отчёта
         keyboard = [[InlineKeyboardButton("📋 Открыть отчёт", callback_data=f"open_{report_id}")]]
         
-        # Отправляем в группу
         await app.bot.send_message(
             chat_id=TELEGRAM_GROUP_ID,
             text=text,
@@ -251,7 +240,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         report_date = context.user_data["date"]
         well = update.message.text
         
-        # Создаём отчёт
         reports = load_json(REPORTS_FILE)
         number = get_next_report_number(brigade)
         
@@ -269,7 +257,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reports.append(new_report)
         save_json(REPORTS_FILE, reports)
         
-        # Логируем создание
         add_change_log(report_id, update.effective_user.id, f"Создан отчёт №{number}")
         
         context.user_data.clear()
@@ -331,7 +318,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "op_mat"
     
     elif state == "op_mat":
-        # Сохраняем операцию
         operations = load_json(OPERATIONS_FILE)
         
         new_operation = {
@@ -350,7 +336,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         operations.append(new_operation)
         save_json(OPERATIONS_FILE, operations)
         
-        # Логируем добавление
         add_change_log(
             context.user_data["report_id"], 
             update.effective_user.id, 
@@ -395,7 +380,6 @@ async def share_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("📤 Отправка отчёта в группу...")
     await send_to_group(report_id)
     
-    # Возвращаемся к отчёту
     await asyncio.sleep(1)
     await render_report(report_id, query.message)
 
@@ -412,7 +396,7 @@ async def show_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not report_logs:
         text += "Нет записей"
     else:
-        for log in report_logs[-10:]:  # Показываем последние 10 записей
+        for log in report_logs[-10:]:
             ts = datetime.fromisoformat(log['timestamp'])
             text += f"{ts.strftime('%d.%m %H:%M')} | {log['action']}\n"
     
@@ -433,5 +417,6 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 if __name__ == "__main__":
     init_db()
-    print("Бот запущен...")
+    print("✅ Бот запущен...")
+    print(f"📁 Файлы данных: {REPORTS_FILE}, {OPERATIONS_FILE}, {CHANGE_LOG_FILE}")
     asyncio.run(app.run_polling())
