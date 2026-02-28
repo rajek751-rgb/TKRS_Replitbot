@@ -2,7 +2,7 @@ services:
   - type: worker
     name: tkrs-bot
     runtime: python
-    repo: https://github.com/yourusername/your-repo-name  # Замените на ваш репозиторий
+    repo: https://github.com/rajek751-rgb/TKRS_Replitbot.git
     plan: free
     envVars:
       - key: BOT_TOKEN
