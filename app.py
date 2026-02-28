@@ -15,8 +15,6 @@ from telegram.ext import (
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = int(os.getenv("GROUP_ID"))
-
 DATA_FILE = "data.json"
 
 
@@ -24,7 +22,7 @@ DATA_FILE = "data.json"
 
 def load_data():
     if not os.path.exists(DATA_FILE):
-        return {"reports": []}
+        return {"reports": [], "group_id": None}
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -42,6 +40,20 @@ def next_number(data, brigade):
 # ================= TELEGRAM =================
 
 app = Application.builder().token(BOT_TOKEN).build()
+
+
+# ===== УСТАНОВКА ГРУППЫ =====
+
+async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type not in ["group", "supergroup"]:
+        await update.message.reply_text("Эту команду нужно выполнить в группе ❗")
+        return
+
+    data = load_data()
+    data["group_id"] = update.effective_chat.id
+    save_data(data)
+
+    await update.message.reply_text("✅ Группа сохранена для отправки отчётов")
 
 
 # ===== START =====
@@ -111,7 +123,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "op_mat"
 
     elif state == "op_mat":
-        data = load_data()
         report_id = context.user_data["report_id"]
 
         for r in data["reports"]:
@@ -127,7 +138,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_report(update.message, report_id)
 
 
-# ===== ПОКАЗ ОТЧЁТА =====
+# ===== ТЕКСТ ОТЧЁТА =====
 
 def build_text(report):
     text = f"""📑 Отчёт №{report['number']}
@@ -149,13 +160,14 @@ def build_text(report):
     return text
 
 
+# ===== ПОКАЗ =====
+
 async def show_report(message, report_id):
     data = load_data()
     report = next(r for r in data["reports"] if r["id"] == report_id)
 
     keyboard = [
         [InlineKeyboardButton("➕ Добавить операцию", callback_data=f"add_{report_id}")],
-        [InlineKeyboardButton("✏ Редактировать операцию", callback_data=f"edit_{report_id}")],
         [InlineKeyboardButton("📤 Отправить в группу", callback_data=f"send_{report_id}")]
     ]
 
@@ -182,32 +194,29 @@ async def send_to_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report_id = int(q.data.split("_")[1])
 
     data = load_data()
+    group_id = data.get("group_id")
+
+    if not group_id:
+        await q.answer("Группа не установлена. Выполните /setgroup в группе ❗")
+        return
+
     report = next(r for r in data["reports"] if r["id"] == report_id)
 
     await context.bot.send_message(
-        chat_id=GROUP_ID,
+        chat_id=group_id,
         text=build_text(report)
     )
 
     await q.answer("Отправлено в группу ✅")
 
 
-async def edit_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    report_id = int(q.data.split("_")[1])
-    context.user_data["report_id"] = report_id
-    context.user_data["state"] = "op_name"
-    await q.edit_message_text("Введите новое название операции:")
-
-
 # ===== HANDLERS =====
 
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("setgroup", set_group))
 app.add_handler(CallbackQueryHandler(new_report, pattern="new"))
 app.add_handler(CallbackQueryHandler(add_operation, pattern="add_"))
 app.add_handler(CallbackQueryHandler(send_to_group, pattern="send_"))
-app.add_handler(CallbackQueryHandler(edit_operation, pattern="edit_"))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
 
