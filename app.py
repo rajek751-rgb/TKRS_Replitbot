@@ -1,7 +1,8 @@
 import os
 import json
-import asyncio
 from datetime import datetime
+from threading import Thread
+from flask import Flask
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
@@ -12,13 +13,30 @@ from telegram.ext import (
     filters,
 )
 
+# ===============================
+# CONFIG
+# ===============================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATA_FILE = "data.json"
 
+# ===============================
+# FLASK SERVER (для Render Free)
+# ===============================
 
-# =========================
+web = Flask(__name__)
+
+@web.route("/")
+def home():
+    return "Bot is running"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    web.run(host="0.0.0.0", port=port)
+
+# ===============================
 # FILE STORAGE
-# =========================
+# ===============================
 
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -26,23 +44,19 @@ def load_data():
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-
-def get_next_report_number(data, brigade):
+def next_report_number(data, brigade):
     numbers = [r["number"] for r in data["reports"] if r["brigade"] == brigade]
     return max(numbers) + 1 if numbers else 1
 
-
-# =========================
-# TELEGRAM
-# =========================
+# ===============================
+# TELEGRAM APP
+# ===============================
 
 app = Application.builder().token(BOT_TOKEN).build()
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("📑 Новый график", callback_data="new")]]
@@ -51,17 +65,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
-
-# =========================
+# ===============================
 # CREATE REPORT
-# =========================
+# ===============================
 
 async def new_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Введите номер бригады:")
     context.user_data["state"] = "brigade"
-
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data.get("state")
@@ -82,7 +94,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         date = context.user_data["date"]
         well = update.message.text
 
-        number = get_next_report_number(data, brigade)
+        number = next_report_number(data, brigade)
         report_id = len(data["reports"]) + 1
 
         data["reports"].append({
@@ -160,10 +172,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         await render_report(report_id, update.message)
 
-
-# =========================
+# ===============================
 # RENDER REPORT
-# =========================
+# ===============================
 
 async def render_report(report_id, message):
     data = load_data()
@@ -194,17 +205,15 @@ async def render_report(report_id, message):
 
     await message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-
-# =========================
+# ===============================
 # CALLBACKS
-# =========================
+# ===============================
 
 async def open_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     report_id = int(query.data.split("_")[1])
     await render_report(report_id, query.message)
-
 
 async def add_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -214,10 +223,9 @@ async def add_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["state"] = "op_date"
     await query.edit_message_text("Введите дату операции (ДД.ММ.ГГГГ):")
 
-
-# =========================
+# ===============================
 # HANDLERS
-# =========================
+# ===============================
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(new_report, pattern="new"))
@@ -225,6 +233,10 @@ app.add_handler(CallbackQueryHandler(open_report, pattern="open_"))
 app.add_handler(CallbackQueryHandler(add_operation, pattern="add_"))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+# ===============================
+# RUN
+# ===============================
 
 if __name__ == "__main__":
-    asyncio.run(app.run_polling())
+    Thread(target=run_web).start()
+    app.run_polling()
