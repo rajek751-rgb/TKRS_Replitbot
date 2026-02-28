@@ -12,7 +12,3 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python app.py
     autoDeploy: true
-    disk:
-      name: data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1
