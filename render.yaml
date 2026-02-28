@@ -3,9 +3,7 @@ services:
     name: tkrs-bot
     runtime: python
     plan: free
-    buildCommand: |
-      pip install --upgrade pip
-      pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt
     startCommand: python app.py
     envVars:
       - key: BOT_TOKEN
