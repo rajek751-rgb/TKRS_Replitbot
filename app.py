@@ -15,7 +15,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATA_FILE = "data.json"
 
 
-# ================== STORAGE ==================
+# ================= STORAGE =================
 
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -31,13 +31,13 @@ def save_data(data):
 
 def log_change(report, user, action):
     report["change_log"].append({
-        "user": user,
+        "user": user or "unknown",
         "action": action,
         "time": datetime.now().strftime("%d.%m.%Y %H:%M")
     })
 
 
-# ================== TELEGRAM ==================
+# ================= TELEGRAM =================
 
 app = Application.builder().token(BOT_TOKEN).build()
 
@@ -46,7 +46,7 @@ app = Application.builder().token(BOT_TOKEN).build()
 
 async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type not in ["group", "supergroup"]:
-        await update.message.reply_text("Команду нужно выполнить в группе.")
+        await update.message.reply_text("Выполните команду в группе.")
         return
 
     data = load_data()
@@ -59,14 +59,14 @@ async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===== START =====
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("📑 Новый отчёт", callback_data="new")]]
+    keyboard = [[InlineKeyboardButton("📑 Новый отчёт", callback_data="new_report")]]
     await update.message.reply_text(
         "🏗 Система отчётности",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
-# ===== CREATE REPORT =====
+# ===== NEW REPORT =====
 
 async def new_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -75,9 +75,13 @@ async def new_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["state"] = "brigade"
 
 
+# ===== TEXT HANDLER =====
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data.get("state")
     data = load_data()
+
+    # ===== HEADER =====
 
     if state == "brigade":
         context.user_data["brigade"] = update.message.text
@@ -143,55 +147,57 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif state == "op_rep":
         context.user_data["op_rep"] = update.message.text
         await update.message.reply_text("Материалы:")
-        context.user_data["state"] = "op_mat"
+        context.user_data["state"] = "op_materials"
 
-    elif state == "op_mat":
+    elif state == "op_materials":
         report_id = context.user_data["report_id"]
 
-        for r in data["reports"]:
-            if r["id"] == report_id:
-                operation = {
-                    "date": context.user_data["op_date"],
-                    "start": context.user_data["op_start"],
-                    "end": context.user_data["op_end"],
-                    "name": context.user_data["op_name"],
-                    "request": context.user_data["op_request"],
-                    "equipment": context.user_data["op_equipment"],
-                    "representative": context.user_data["op_rep"],
-                    "materials": update.message.text
-                }
+        report = next((r for r in data["reports"] if r["id"] == report_id), None)
+        if not report:
+            await update.message.reply_text("Ошибка: отчёт не найден.")
+            return
 
-                r["operations"].append(operation)
-                log_change(r, update.effective_user.username, f"Добавлена операция: {operation['name']}")
+        operation = {
+            "date": context.user_data["op_date"],
+            "start": context.user_data["op_start"],
+            "end": context.user_data["op_end"],
+            "name": context.user_data["op_name"],
+            "request": context.user_data["op_request"],
+            "equipment": context.user_data["op_equipment"],
+            "representative": context.user_data["op_rep"],
+            "materials": update.message.text
+        }
 
+        report["operations"].append(operation)
+        log_change(report, update.effective_user.username, f"Добавлена операция: {operation['name']}")
         save_data(data)
+
         context.user_data.clear()
         await show_report(update.message, report_id)
 
 
-# ===== SHOW REPORT =====
+# ===== BUILD REPORT TEXT =====
 
 def build_text(report):
     h = report["header"]
 
-    text = f"""📑 Отчёт
+    text = (
+        f"📑 Отчёт\n\n"
+        f"Бригада: {h['brigade']}\n"
+        f"Скважина: {h['well']}\n"
+        f"Месторождение: {h['field']}\n\n"
+        f"──────────────\n"
+    )
 
-Бригада: {h['brigade']}
-Скважина: {h['well']}
-Месторождение: {h['field']}
-
-──────────────
-"""
-
-    for i, op in enumerate(report["operations"]):
-        text += f"""{i+1}. {op['date']} {op['start']}–{op['end']}
-{op['name']}
-Заявка: {op['request']}
-Техника: {op['equipment']}
-Представитель: {op['representative']}
-Материалы: {op['materials']}
-
-"""
+    for i, op in enumerate(report["operations"], start=1):
+        text += (
+            f"{i}. {op['date']} {op['start']}–{op['end']}\n"
+            f"{op['name']}\n"
+            f"Заявка: {op['request']}\n"
+            f"Техника: {op['equipment']}\n"
+            f"Представитель: {op['representative']}\n"
+            f"Материалы: {op['materials']}\n\n"
+        )
 
     text += "──────────────\nЖурнал изменений:\n"
 
@@ -201,9 +207,15 @@ def build_text(report):
     return text
 
 
+# ===== SHOW REPORT =====
+
 async def show_report(message, report_id):
     data = load_data()
-    report = next(r for r in data["reports"] if r["id"] == report_id)
+    report = next((r for r in data["reports"] if r["id"] == report_id), None)
+
+    if not report:
+        await message.reply_text("Отчёт не найден.")
+        return
 
     keyboard = [
         [InlineKeyboardButton("➕ Добавить операцию", callback_data=f"add_{report_id}")],
@@ -221,17 +233,19 @@ async def show_report(message, report_id):
 async def add_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+
     report_id = int(q.data.split("_")[1])
     context.user_data["report_id"] = report_id
     context.user_data["state"] = "op_date"
+
     await q.edit_message_text("Введите дату операции (ДД.ММ.ГГГГ):")
 
 
 async def send_to_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    report_id = int(q.data.split("_")[1])
 
+    report_id = int(q.data.split("_")[1])
     data = load_data()
     group_id = data.get("group_id")
 
@@ -239,7 +253,10 @@ async def send_to_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("Сначала выполните /setgroup в группе.")
         return
 
-    report = next(r for r in data["reports"] if r["id"] == report_id])
+    report = next((r for r in data["reports"] if r["id"] == report_id), None)
+    if not report:
+        await q.answer("Отчёт не найден.")
+        return
 
     await context.bot.send_message(chat_id=group_id, text=build_text(report))
     await q.answer("Отправлено в группу ✅")
@@ -249,7 +266,7 @@ async def send_to_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("setgroup", set_group))
-app.add_handler(CallbackQueryHandler(new_report, pattern="new"))
+app.add_handler(CallbackQueryHandler(new_report, pattern="new_report"))
 app.add_handler(CallbackQueryHandler(add_operation, pattern="add_"))
 app.add_handler(CallbackQueryHandler(send_to_group, pattern="send_"))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
