@@ -1,14 +1,9 @@
 services:
-  - type: web
+  - type: worker
     name: tkrs-bot
     runtime: python
-    repo: https://github.com/rajek751-rgb/TKRS_Replitbot.git
-    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python app.py"
     envVars:
       - key: BOT_TOKEN
         sync: false
-      - key: TELEGRAM_GROUP_ID
-        sync: false
-    buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
-    autoDeploy: true
