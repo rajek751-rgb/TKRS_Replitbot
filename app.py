@@ -336,7 +336,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===== ЗАПУСК =================
 # =============================
 
-async def main():
+def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(MessageHandler(filters.ALL, capture_group), group=0)
@@ -344,8 +344,8 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(CallbackQueryHandler(callbacks))
 
-    await app.run_polling()
+    app.run_polling()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
