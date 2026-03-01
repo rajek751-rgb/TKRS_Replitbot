@@ -1,11 +1,8 @@
 import os
+import json
 import asyncio
 from datetime import datetime
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -16,7 +13,24 @@ from telegram.ext import (
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = int(os.getenv("GROUP_ID"))
+
+# ====== ФАЙЛ ДЛЯ СОХРАНЕНИЯ GROUP_ID ======
+GROUP_FILE = "group.json"
+
+
+def save_group_id(chat_id):
+    with open(GROUP_FILE, "w") as f:
+        json.dump({"group_id": chat_id}, f)
+
+
+def load_group_id():
+    if os.path.exists(GROUP_FILE):
+        with open(GROUP_FILE, "r") as f:
+            return json.load(f).get("group_id")
+    return None
+
+
+GROUP_ID = load_group_id()
 
 # ====== СПИСОК ТЕХНИКИ ======
 
@@ -36,9 +50,24 @@ EQUIPMENT_LIST = [
     "УАЗ"
 ]
 
+# =============================
+# ===== АВТООПРЕДЕЛЕНИЕ ГРУППЫ
+# =============================
+
+async def capture_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global GROUP_ID
+
+    chat = update.effective_chat
+
+    if chat.type in ["group", "supergroup"]:
+        if GROUP_ID != chat.id:
+            GROUP_ID = chat.id
+            save_group_id(chat.id)
+            print(f"GROUP_ID сохранён: {GROUP_ID}")
+
 
 # =============================
-# ====== ЭТАП 1 — ШАПКА ======
+# ===== ЭТАП 1 — ШАПКА ========
 # =============================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -71,8 +100,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = None
         await show_stage2_menu(update.message)
 
-    # ===== операция =====
-
     elif state == "op_name":
         context.user_data["op"]["name"] = update.message.text
         context.user_data["state"] = None
@@ -90,7 +117,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =============================
-# ====== ЭТАП 2 — МЕНЮ =======
+# ===== ЭТАП 2 — МЕНЮ =========
 # =============================
 
 async def show_stage2_menu(message):
@@ -114,8 +141,6 @@ async def add_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["op"] = {
         "date": datetime.now().strftime("%d.%m.%Y"),
-        "start": "",
-        "end": "",
         "name": "",
         "equipment": [],
         "representative": "",
@@ -127,7 +152,7 @@ async def add_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =============================
-# ====== МЕНЮ ЗАЯВКИ =========
+# ===== МЕНЮ ЗАЯВКИ ===========
 # =============================
 
 def build_request_keyboard(context):
@@ -143,6 +168,7 @@ def build_request_keyboard(context):
         [InlineKeyboardButton(f"🧰 Материалы{mat_mark}", callback_data="req_materials")],
         [InlineKeyboardButton("💾 Сохранить операцию", callback_data="save_operation")]
     ]
+
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -154,7 +180,7 @@ async def show_request_menu(message, context):
 
 
 # =============================
-# ====== ТЕХНИКА =============
+# ===== ТЕХНИКА ===============
 # =============================
 
 def build_equipment_keyboard(selected):
@@ -207,7 +233,7 @@ async def toggle_equipment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =============================
-# ====== СОХРАНИТЬ ОП ========
+# ===== СОХРАНИТЬ ОП ==========
 # =============================
 
 async def save_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -224,12 +250,21 @@ async def save_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =============================
-# ====== ОТПРАВКА ОТЧЁТА =====
+# ===== ОТПРАВКА ОТЧЁТА =======
 # =============================
 
 async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global GROUP_ID
+
     query = update.callback_query
     await query.answer()
+
+    if not GROUP_ID:
+        await query.edit_message_text(
+            "Бот ещё не получил ID группы.\n"
+            "Напишите любое сообщение в группе."
+        )
+        return
 
     report = context.user_data["report"]
     header = report["header"]
@@ -261,7 +296,7 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =============================
-# ====== CALLBACK ROUTER =====
+# ===== CALLBACK ROUTER =======
 # =============================
 
 async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -298,12 +333,13 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =============================
-# ====== ЗАПУСК ==============
+# ===== ЗАПУСК =================
 # =============================
 
 async def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
+    app.add_handler(MessageHandler(filters.ALL, capture_group), group=0)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(CallbackQueryHandler(callbacks))
