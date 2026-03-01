@@ -14,12 +14,26 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATA_FILE = "data.json"
 
+EQUIPMENT_LIST = [
+    "ЦА", "АЦН-10", "АКН",
+    "АХО", "ППУ", "Цементосмеситель",
+    "Автокран", "Звено глушения",
+    "Звено СКБ", "Тягач",
+    "Седельный тягач",
+    "АЗА",
+    "Седельный тягач с КМУ",
+    "Бортовой с КМУ",
+    "Топливозаправщик",
+    "Водовозка",
+    "АРОК",
+    "Вахтовый автобус",
+    "УАЗ"
+]
 
-# ================= STORAGE =================
 
 def load_data():
     if not os.path.exists(DATA_FILE):
-        return {"reports": [], "group_id": None}
+        return {"reports": []}
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -29,247 +43,214 @@ def save_data(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def log_change(report, user, action):
-    report["change_log"].append({
-        "user": user or "unknown",
-        "action": action,
-        "time": datetime.now().strftime("%d.%m.%Y %H:%M")
-    })
-
-
-# ================= TELEGRAM =================
-
 app = Application.builder().token(BOT_TOKEN).build()
 
 
-# ===== SET GROUP =====
-
-async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type not in ["group", "supergroup"]:
-        await update.message.reply_text("Выполните команду в группе.")
-        return
-
-    data = load_data()
-    data["group_id"] = update.effective_chat.id
-    save_data(data)
-
-    await update.message.reply_text("✅ Группа сохранена.")
-
-
-# ===== START =====
+# ================= START =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("📑 Новый отчёт", callback_data="new_report")]]
-    await update.message.reply_text(
-        "🏗 Система отчётности",
+    context.user_data.clear()
+    context.user_data["report"] = {
+        "header": {},
+        "operations": []
+    }
+    await show_stage1(update.message)
+
+
+# ================= ЭТАП 1 =================
+
+async def show_stage1(message):
+    keyboard = [
+        [InlineKeyboardButton("Номер бригады ТКРС", callback_data="brigade")],
+        [InlineKeyboardButton("Номер скважины", callback_data="well")],
+        [InlineKeyboardButton("Месторождение", callback_data="field")],
+        [InlineKeyboardButton("▶ Начать заполнение", callback_data="start_stage2")]
+    ]
+    await message.reply_text(
+        "ЭТАП 1 — Заполнение шапки",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
-# ===== NEW REPORT =====
-
-async def new_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stage1_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    await q.edit_message_text("Введите номер бригады:")
-    context.user_data["state"] = "brigade"
+
+    field = q.data
+    context.user_data["state"] = field
+    await q.edit_message_text(f"Введите: {field}")
 
 
-# ===== TEXT HANDLER =====
+# ================= ЭТАП 2 =================
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    state = context.user_data.get("state")
-    data = load_data()
-
-    # ===== HEADER =====
-
-    if state == "brigade":
-        context.user_data["brigade"] = update.message.text
-        await update.message.reply_text("Введите скважину:")
-        context.user_data["state"] = "well"
-
-    elif state == "well":
-        context.user_data["well"] = update.message.text
-        await update.message.reply_text("Введите месторождение:")
-        context.user_data["state"] = "field"
-
-    elif state == "field":
-        report = {
-            "id": len(data["reports"]) + 1,
-            "header": {
-                "brigade": context.user_data["brigade"],
-                "well": context.user_data["well"],
-                "field": update.message.text
-            },
-            "operations": [],
-            "change_log": []
-        }
-
-        log_change(report, update.effective_user.username, "Создан отчёт")
-        data["reports"].append(report)
-        save_data(data)
-        context.user_data.clear()
-
-        await show_report(update.message, report["id"])
-
-    # ===== ADD OPERATION =====
-
-    elif state == "op_date":
-        context.user_data["op_date"] = update.message.text
-        await update.message.reply_text("Время начала (ЧЧ:ММ):")
-        context.user_data["state"] = "op_start"
-
-    elif state == "op_start":
-        context.user_data["op_start"] = update.message.text
-        await update.message.reply_text("Время окончания (ЧЧ:ММ):")
-        context.user_data["state"] = "op_end"
-
-    elif state == "op_end":
-        context.user_data["op_end"] = update.message.text
-        await update.message.reply_text("Название операции:")
-        context.user_data["state"] = "op_name"
-
-    elif state == "op_name":
-        context.user_data["op_name"] = update.message.text
-        await update.message.reply_text("Заявка №:")
-        context.user_data["state"] = "op_request"
-
-    elif state == "op_request":
-        context.user_data["op_request"] = update.message.text
-        await update.message.reply_text("Техника:")
-        context.user_data["state"] = "op_equipment"
-
-    elif state == "op_equipment":
-        context.user_data["op_equipment"] = update.message.text
-        await update.message.reply_text("Представитель:")
-        context.user_data["state"] = "op_rep"
-
-    elif state == "op_rep":
-        context.user_data["op_rep"] = update.message.text
-        await update.message.reply_text("Материалы:")
-        context.user_data["state"] = "op_materials"
-
-    elif state == "op_materials":
-        report_id = context.user_data["report_id"]
-
-        report = next((r for r in data["reports"] if r["id"] == report_id), None)
-        if not report:
-            await update.message.reply_text("Ошибка: отчёт не найден.")
-            return
-
-        operation = {
-            "date": context.user_data["op_date"],
-            "start": context.user_data["op_start"],
-            "end": context.user_data["op_end"],
-            "name": context.user_data["op_name"],
-            "request": context.user_data["op_request"],
-            "equipment": context.user_data["op_equipment"],
-            "representative": context.user_data["op_rep"],
-            "materials": update.message.text
-        }
-
-        report["operations"].append(operation)
-        log_change(report, update.effective_user.username, f"Добавлена операция: {operation['name']}")
-        save_data(data)
-
-        context.user_data.clear()
-        await show_report(update.message, report_id)
-
-
-# ===== BUILD REPORT TEXT =====
-
-def build_text(report):
-    h = report["header"]
-
-    text = (
-        f"📑 Отчёт\n\n"
-        f"Бригада: {h['brigade']}\n"
-        f"Скважина: {h['well']}\n"
-        f"Месторождение: {h['field']}\n\n"
-        f"──────────────\n"
-    )
-
-    for i, op in enumerate(report["operations"], start=1):
-        text += (
-            f"{i}. {op['date']} {op['start']}–{op['end']}\n"
-            f"{op['name']}\n"
-            f"Заявка: {op['request']}\n"
-            f"Техника: {op['equipment']}\n"
-            f"Представитель: {op['representative']}\n"
-            f"Материалы: {op['materials']}\n\n"
-        )
-
-    text += "──────────────\nЖурнал изменений:\n"
-
-    for log in report["change_log"]:
-        text += f"{log['time']} | {log['user']} | {log['action']}\n"
-
-    return text
-
-
-# ===== SHOW REPORT =====
-
-async def show_report(message, report_id):
-    data = load_data()
-    report = next((r for r in data["reports"] if r["id"] == report_id), None)
-
-    if not report:
-        await message.reply_text("Отчёт не найден.")
-        return
-
+async def show_stage2(message):
     keyboard = [
-        [InlineKeyboardButton("➕ Добавить операцию", callback_data=f"add_{report_id}")],
-        [InlineKeyboardButton("📤 Отправить в группу", callback_data=f"send_{report_id}")]
+        [InlineKeyboardButton("Дата", callback_data="op_date")],
+        [InlineKeyboardButton("Время начала", callback_data="op_start")],
+        [InlineKeyboardButton("Время окончания", callback_data="op_end")],
+        [InlineKeyboardButton("Название операции", callback_data="op_name")],
+        [InlineKeyboardButton("Заявка", callback_data="op_request")],
+        [InlineKeyboardButton("➕ Добавить операцию", callback_data="add_operation")]
     ]
 
     await message.reply_text(
-        build_text(report),
+        "ЭТАП 2 — Операции",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
-# ===== CALLBACKS =====
-
-async def add_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stage2_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    report_id = int(q.data.split("_")[1])
-    context.user_data["report_id"] = report_id
-    context.user_data["state"] = "op_date"
+    action = q.data
 
-    await q.edit_message_text("Введите дату операции (ДД.ММ.ГГГГ):")
+    if action == "start_stage2":
+        await show_stage2(q.message)
+        return
+
+    if action in ["op_date", "op_start", "op_end", "op_name"]:
+        context.user_data["state"] = action
+        await q.edit_message_text(f"Введите {action}")
+
+    if action == "op_request":
+        await show_request_menu(q)
+
+    if action == "add_operation":
+        await save_operation(q, context)
 
 
-async def send_to_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= ЗАЯВКА МЕНЮ =================
+
+async def show_request_menu(q):
+    keyboard = [
+        [InlineKeyboardButton("Техника", callback_data="req_equipment")],
+        [InlineKeyboardButton("Представитель заказчика", callback_data="req_rep")],
+        [InlineKeyboardButton("Оборудование и материалы", callback_data="req_materials")],
+        [InlineKeyboardButton("⬅ Назад", callback_data="back_stage2")]
+    ]
+    await q.edit_message_text(
+        "Заполнение заявки:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def request_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    report_id = int(q.data.split("_")[1])
-    data = load_data()
-    group_id = data.get("group_id")
+    action = q.data
 
-    if not group_id:
-        await q.answer("Сначала выполните /setgroup в группе.")
+    if action == "req_equipment":
+        await show_equipment_menu(q)
+
+    elif action == "req_rep":
+        context.user_data["state"] = "rep"
+        await q.edit_message_text("Введите представителя заказчика:")
+
+    elif action == "req_materials":
+        context.user_data["state"] = "materials"
+        await q.edit_message_text("Введите оборудование и материалы:")
+
+    elif action == "back_stage2":
+        await show_stage2(q.message)
+
+
+# ================= ТЕХНИКА =================
+
+async def show_equipment_menu(q):
+    keyboard = []
+    row = []
+
+    for i, eq in enumerate(EQUIPMENT_LIST, start=1):
+        row.append(InlineKeyboardButton(eq, callback_data=f"equip_{eq}"))
+        if i % 3 == 0:
+            keyboard.append(row)
+            row = []
+
+    if row:
+        keyboard.append(row)
+
+    keyboard.append([InlineKeyboardButton("➕ Добавить технику", callback_data="equip_add")])
+
+    await q.edit_message_text(
+        "Выберите технику:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def equipment_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    if q.data == "equip_add":
+        context.user_data["state"] = "add_equipment"
+        await q.edit_message_text("Введите новую технику:")
         return
 
-    report = next((r for r in data["reports"] if r["id"] == report_id), None)
-    if not report:
-        await q.answer("Отчёт не найден.")
-        return
-
-    await context.bot.send_message(chat_id=group_id, text=build_text(report))
-    await q.answer("Отправлено в группу ✅")
+    equipment = q.data.replace("equip_", "")
+    context.user_data["equipment"] = equipment
+    await q.edit_message_text(f"Выбрана техника: {equipment}")
 
 
-# ===== HANDLERS =====
+# ================= СОХРАНЕНИЕ =================
+
+async def save_operation(q, context):
+    operation = {
+        "date": context.user_data.get("op_date"),
+        "start": context.user_data.get("op_start"),
+        "end": context.user_data.get("op_end"),
+        "name": context.user_data.get("op_name"),
+        "equipment": context.user_data.get("equipment"),
+        "representative": context.user_data.get("rep"),
+        "materials": context.user_data.get("materials"),
+    }
+
+    context.user_data["report"]["operations"].append(operation)
+
+    await q.edit_message_text("✅ Операция добавлена")
+
+
+# ================= TEXT HANDLER =================
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state = context.user_data.get("state")
+
+    if state in ["brigade", "well", "field"]:
+        context.user_data["report"]["header"][state] = update.message.text
+        context.user_data["state"] = None
+        await show_stage1(update.message)
+
+    elif state in ["op_date", "op_start", "op_end", "op_name"]:
+        context.user_data[state] = update.message.text
+        context.user_data["state"] = None
+        await show_stage2(update.message)
+
+    elif state == "rep":
+        context.user_data["rep"] = update.message.text
+        context.user_data["state"] = None
+        await show_stage2(update.message)
+
+    elif state == "materials":
+        context.user_data["materials"] = update.message.text
+        context.user_data["state"] = None
+        await show_stage2(update.message)
+
+    elif state == "add_equipment":
+        EQUIPMENT_LIST.append(update.message.text)
+        context.user_data["equipment"] = update.message.text
+        context.user_data["state"] = None
+        await show_stage2(update.message)
+
+
+# ================= HANDLERS =================
 
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("setgroup", set_group))
-app.add_handler(CallbackQueryHandler(new_report, pattern="new_report"))
-app.add_handler(CallbackQueryHandler(add_operation, pattern="add_"))
-app.add_handler(CallbackQueryHandler(send_to_group, pattern="send_"))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+app.add_handler(CallbackQueryHandler(stage1_buttons, pattern="brigade|well|field"))
+app.add_handler(CallbackQueryHandler(stage2_buttons, pattern="start_stage2|op_.*|add_operation"))
+app.add_handler(CallbackQueryHandler(request_buttons, pattern="req_.*|back_stage2"))
+app.add_handler(CallbackQueryHandler(equipment_buttons, pattern="equip_.*"))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
 
 if __name__ == "__main__":
