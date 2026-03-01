@@ -1,374 +1,115 @@
 import os
-import json
-import threading
-from datetime import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import asyncio
+from flask import Flask, request
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
-    MessageHandler,
     CallbackQueryHandler,
+    MessageHandler,
     ContextTypes,
     filters,
 )
 
-# =========================
-# BOT TOKEN
-# =========================
+# ================= CONFIG =================
+TOKEN = os.environ.get("BOT_TOKEN")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("BOT_TOKEN not set")
 
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не установлен")
+if not WEBHOOK_URL:
+    raise ValueError("WEBHOOK_URL not set")
 
-# =========================
-# DUMMY SERVER (для Web Service)
-# =========================
+# ================= FLASK =================
+app = Flask(__name__)
 
-class DummyHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is running")
+# ================= TELEGRAM =================
+application = Application.builder().token(TOKEN).build()
 
 
-def run_dummy_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), DummyHandler)
-    server.serve_forever()
-
-
-# =========================
-# GROUP AUTO SAVE
-# =========================
-
-GROUP_FILE = "group.json"
-
-
-def save_group_id(chat_id):
-    with open(GROUP_FILE, "w") as f:
-        json.dump({"group_id": chat_id}, f)
-
-
-def load_group_id():
-    if os.path.exists(GROUP_FILE):
-        with open(GROUP_FILE, "r") as f:
-            return json.load(f).get("group_id")
-    return None
-
-
-GROUP_ID = load_group_id()
-
-
-async def capture_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global GROUP_ID
-
-    chat = update.effective_chat
-
-    if chat.type in ["group", "supergroup"]:
-        if GROUP_ID != chat.id:
-            GROUP_ID = chat.id
-            save_group_id(chat.id)
-            print(f"GROUP_ID сохранён: {GROUP_ID}")
-
-
-# =========================
-# EQUIPMENT LIST
-# =========================
-
-EQUIPMENT_LIST = [
-    "ЦА", "АЦН-10", "АКН",
-    "АХО", "ППУ", "Цементосмеситель",
-    "Автокран", "Звено глушения",
-    "Звено СКБ", "Тягач",
-    "Седельный тягач",
-    "АЗА",
-    "Седельный тягач с КМУ",
-    "Бортовой с КМУ",
-    "Топливозаправщик",
-    "Водовозка",
-    "АРОК",
-    "Вахтовый автобус",
-    "УАЗ"
-]
-
-# =========================
-# ЭТАП 1 — ШАПКА
-# =========================
-
+# ---------- /start ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
+    keyboard = [["Меню 📋", "Помощь ℹ️"]]
+    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-    context.user_data["report"] = {
-        "header": {},
-        "operations": []
-    }
-
-    context.user_data["state"] = "brigade"
-    await update.message.reply_text("Введите номер бригады ТКРС:")
-
-
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    state = context.user_data.get("state")
-
-    if state == "brigade":
-        context.user_data["report"]["header"]["brigade"] = update.message.text
-        context.user_data["state"] = "well"
-        await update.message.reply_text("Введите номер скважины:")
-
-    elif state == "well":
-        context.user_data["report"]["header"]["well"] = update.message.text
-        context.user_data["state"] = "field"
-        await update.message.reply_text("Введите месторождение:")
-
-    elif state == "field":
-        context.user_data["report"]["header"]["field"] = update.message.text
-        context.user_data["state"] = None
-        await show_stage2_menu(update.message)
-
-    elif state == "op_name":
-        context.user_data["op"]["name"] = update.message.text
-        context.user_data["state"] = None
-        await show_request_menu(update.message, context)
-
-    elif state == "rep":
-        context.user_data["op"]["representative"] = update.message.text
-        context.user_data["state"] = None
-        await show_request_menu(update.message, context)
-
-    elif state == "materials":
-        context.user_data["op"]["materials"] = update.message.text
-        context.user_data["state"] = None
-        await show_request_menu(update.message, context)
-
-
-# =========================
-# ЭТАП 2 — МЕНЮ
-# =========================
-
-async def show_stage2_menu(message):
-    keyboard = [
-        [InlineKeyboardButton("➕ Добавить операцию", callback_data="add_operation")],
-        [InlineKeyboardButton("📤 Отправить отчёт", callback_data="send_report")]
-    ]
-    await message.reply_text(
-        "ЭТАП 2 — Операции",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "Привет 👋 Выбери действие:",
+        reply_markup=markup,
     )
 
 
-# =========================
-# ДОБАВИТЬ ОПЕРАЦИЮ
-# =========================
+# ---------- TEXT ----------
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
 
-async def add_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    if text == "Меню 📋":
+        keyboard = [
+            [
+                InlineKeyboardButton("Кнопка 1", callback_data="btn1"),
+                InlineKeyboardButton("Кнопка 2", callback_data="btn2"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
-    context.user_data["op"] = {
-        "date": datetime.now().strftime("%d.%m.%Y"),
-        "name": "",
-        "equipment": [],
-        "representative": "",
-        "materials": ""
-    }
-
-    context.user_data["state"] = "op_name"
-    await query.edit_message_text("Введите название операции:")
-
-
-# =========================
-# МЕНЮ ЗАЯВКИ
-# =========================
-
-def build_request_keyboard(context):
-    op = context.user_data["op"]
-
-    eq_mark = " ✅" if op["equipment"] else ""
-    rep_mark = " ✅" if op["representative"] else ""
-    mat_mark = " ✅" if op["materials"] else ""
-
-    keyboard = [
-        [InlineKeyboardButton(f"🚜 Техника{eq_mark}", callback_data="req_equipment")],
-        [InlineKeyboardButton(f"👤 Представитель{rep_mark}", callback_data="req_rep")],
-        [InlineKeyboardButton(f"🧰 Материалы{mat_mark}", callback_data="req_materials")],
-        [InlineKeyboardButton("💾 Сохранить операцию", callback_data="save_operation")]
-    ]
-
-    return InlineKeyboardMarkup(keyboard)
-
-
-async def show_request_menu(message, context):
-    await message.reply_text(
-        "Заявки:",
-        reply_markup=build_request_keyboard(context)
-    )
-
-
-# =========================
-# ТЕХНИКА
-# =========================
-
-def build_equipment_keyboard(selected):
-    keyboard = []
-
-    for item in EQUIPMENT_LIST:
-        mark = " ✅" if item in selected else ""
-        keyboard.append([
-            InlineKeyboardButton(item + mark, callback_data=f"eq_{item}")
-        ])
-
-    keyboard.append([InlineKeyboardButton("⬅ Назад", callback_data="back_to_requests")])
-    return InlineKeyboardMarkup(keyboard)
-
-
-async def equipment_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    await query.edit_message_text(
-        "Выберите технику:",
-        reply_markup=build_equipment_keyboard(
-            context.user_data["op"]["equipment"]
+        await update.message.reply_text(
+            "Вот inline кнопки:",
+            reply_markup=reply_markup,
         )
-    )
 
+    elif text == "Помощь ℹ️":
+        await update.message.reply_text("Это бот с кнопками 🚀")
 
-async def toggle_equipment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    item = query.data.replace("eq_", "")
-    selected = context.user_data["op"]["equipment"]
-
-    if item in selected:
-        selected.remove(item)
     else:
-        selected.append(item)
-
-    await query.edit_message_text(
-        "Выберите технику:",
-        reply_markup=build_equipment_keyboard(selected)
-    )
+        await update.message.reply_text(f"Ты написал: {text}")
 
 
-# =========================
-# СОХРАНИТЬ ОПЕРАЦИЮ
-# =========================
-
-async def save_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------- INLINE ----------
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    context.user_data["report"]["operations"].append(
-        context.user_data["op"]
-    )
-
-    await query.edit_message_text("✅ Операция сохранена")
-    await show_stage2_menu(query.message)
+    if query.data == "btn1":
+        await query.edit_message_text("Нажата кнопка 1 ✅")
+    elif query.data == "btn2":
+        await query.edit_message_text("Нажата кнопка 2 ✅")
 
 
-# =========================
-# ОТПРАВКА ОТЧЁТА
-# =========================
-
-async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global GROUP_ID
-
-    query = update.callback_query
-    await query.answer()
-
-    if not GROUP_ID:
-        await query.edit_message_text(
-            "Бот ещё не получил ID группы.\n"
-            "Напишите любое сообщение в группе."
-        )
-        return
-
-    report = context.user_data["report"]
-    header = report["header"]
-    operations = report["operations"]
-
-    if not operations:
-        await query.edit_message_text("Нет операций.")
-        return
-
-    text = (
-        f"📑 ОТЧЁТ\n\n"
-        f"Бригада: {header['brigade']}\n"
-        f"Скважина: {header['well']}\n"
-        f"Месторождение: {header['field']}\n\n"
-    )
-
-    for i, op in enumerate(operations, 1):
-        text += (
-            f"{i}. {op['date']}\n"
-            f"Операция: {op['name']}\n"
-            f"Техника: {', '.join(op['equipment'])}\n"
-            f"Представитель: {op['representative']}\n"
-            f"Материалы: {op['materials']}\n\n"
-        )
-
-    await context.bot.send_message(chat_id=GROUP_ID, text=text)
-    await query.edit_message_text("📤 Отчёт отправлен в группу")
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+application.add_handler(CallbackQueryHandler(button_handler))
 
 
-# =========================
-# CALLBACK ROUTER
-# =========================
-
-async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-
-    if query.data == "add_operation":
-        await add_operation(update, context)
-
-    elif query.data == "req_equipment":
-        await equipment_menu(update, context)
-
-    elif query.data.startswith("eq_"):
-        await toggle_equipment(update, context)
-
-    elif query.data == "back_to_requests":
-        await query.edit_message_text(
-            "Заявки:",
-            reply_markup=build_request_keyboard(context)
-        )
-
-    elif query.data == "req_rep":
-        context.user_data["state"] = "rep"
-        await query.edit_message_text("Введите представителя:")
-
-    elif query.data == "req_materials":
-        context.user_data["state"] = "materials"
-        await query.edit_message_text("Введите материалы:")
-
-    elif query.data == "save_operation":
-        await save_operation(update, context)
-
-    elif query.data == "send_report":
-        await send_report(update, context)
+# ================= WEBHOOK =================
+@app.post(f"/{TOKEN}")
+async def webhook():
+    data = request.get_json(force=True)
+    update = Update.de_json(data, application.bot)
+    await application.process_update(update)
+    return "ok"
 
 
-# =========================
-# ЗАПУСК
-# =========================
+@app.get("/")
+def health():
+    return "Bot is running!"
 
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.ALL, capture_group), group=0)
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-    app.add_handler(CallbackQueryHandler(callbacks))
+# ================= STARTUP =================
+async def setup_webhook():
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    await application.bot.set_webhook(f"{WEBHOOK_URL}/{TOKEN}")
 
-    # запускаем сервер для Render
-    threading.Thread(target=run_dummy_server).start()
 
-    app.run_polling()
+# Gunicorn hook
+@app.before_first_request
+def activate_job():
+    asyncio.run(setup_webhook())
 
 
 if __name__ == "__main__":
-    main()
+    app.run(host="0.0.0.0", port=10000)
