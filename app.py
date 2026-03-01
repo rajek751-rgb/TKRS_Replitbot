@@ -1,7 +1,9 @@
 import os
 import json
-import asyncio
+import threading
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -12,9 +14,36 @@ from telegram.ext import (
     filters,
 )
 
+# =========================
+# BOT TOKEN
+# =========================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# ====== ФАЙЛ ДЛЯ СОХРАНЕНИЯ GROUP_ID ======
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN не установлен")
+
+# =========================
+# DUMMY SERVER (для Web Service)
+# =========================
+
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running")
+
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    server.serve_forever()
+
+
+# =========================
+# GROUP AUTO SAVE
+# =========================
+
 GROUP_FILE = "group.json"
 
 
@@ -32,7 +61,22 @@ def load_group_id():
 
 GROUP_ID = load_group_id()
 
-# ====== СПИСОК ТЕХНИКИ ======
+
+async def capture_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global GROUP_ID
+
+    chat = update.effective_chat
+
+    if chat.type in ["group", "supergroup"]:
+        if GROUP_ID != chat.id:
+            GROUP_ID = chat.id
+            save_group_id(chat.id)
+            print(f"GROUP_ID сохранён: {GROUP_ID}")
+
+
+# =========================
+# EQUIPMENT LIST
+# =========================
 
 EQUIPMENT_LIST = [
     "ЦА", "АЦН-10", "АКН",
@@ -50,25 +94,9 @@ EQUIPMENT_LIST = [
     "УАЗ"
 ]
 
-# =============================
-# ===== АВТООПРЕДЕЛЕНИЕ ГРУППЫ
-# =============================
-
-async def capture_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global GROUP_ID
-
-    chat = update.effective_chat
-
-    if chat.type in ["group", "supergroup"]:
-        if GROUP_ID != chat.id:
-            GROUP_ID = chat.id
-            save_group_id(chat.id)
-            print(f"GROUP_ID сохранён: {GROUP_ID}")
-
-
-# =============================
-# ===== ЭТАП 1 — ШАПКА ========
-# =============================
+# =========================
+# ЭТАП 1 — ШАПКА
+# =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
@@ -116,9 +144,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_request_menu(update.message, context)
 
 
-# =============================
-# ===== ЭТАП 2 — МЕНЮ =========
-# =============================
+# =========================
+# ЭТАП 2 — МЕНЮ
+# =========================
 
 async def show_stage2_menu(message):
     keyboard = [
@@ -131,9 +159,9 @@ async def show_stage2_menu(message):
     )
 
 
-# =============================
-# ===== ДОБАВИТЬ ОПЕРАЦИЮ =====
-# =============================
+# =========================
+# ДОБАВИТЬ ОПЕРАЦИЮ
+# =========================
 
 async def add_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -151,9 +179,9 @@ async def add_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("Введите название операции:")
 
 
-# =============================
-# ===== МЕНЮ ЗАЯВКИ ===========
-# =============================
+# =========================
+# МЕНЮ ЗАЯВКИ
+# =========================
 
 def build_request_keyboard(context):
     op = context.user_data["op"]
@@ -179,9 +207,9 @@ async def show_request_menu(message, context):
     )
 
 
-# =============================
-# ===== ТЕХНИКА ===============
-# =============================
+# =========================
+# ТЕХНИКА
+# =========================
 
 def build_equipment_keyboard(selected):
     keyboard = []
@@ -189,16 +217,10 @@ def build_equipment_keyboard(selected):
     for item in EQUIPMENT_LIST:
         mark = " ✅" if item in selected else ""
         keyboard.append([
-            InlineKeyboardButton(
-                item + mark,
-                callback_data=f"eq_{item}"
-            )
+            InlineKeyboardButton(item + mark, callback_data=f"eq_{item}")
         ])
 
-    keyboard.append(
-        [InlineKeyboardButton("⬅ Назад", callback_data="back_to_requests")]
-    )
-
+    keyboard.append([InlineKeyboardButton("⬅ Назад", callback_data="back_to_requests")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -232,9 +254,9 @@ async def toggle_equipment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# =============================
-# ===== СОХРАНИТЬ ОП ==========
-# =============================
+# =========================
+# СОХРАНИТЬ ОПЕРАЦИЮ
+# =========================
 
 async def save_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -245,13 +267,12 @@ async def save_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await query.edit_message_text("✅ Операция сохранена")
-
     await show_stage2_menu(query.message)
 
 
-# =============================
-# ===== ОТПРАВКА ОТЧЁТА =======
-# =============================
+# =========================
+# ОТПРАВКА ОТЧЁТА
+# =========================
 
 async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global GROUP_ID
@@ -291,13 +312,12 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     await context.bot.send_message(chat_id=GROUP_ID, text=text)
-
     await query.edit_message_text("📤 Отчёт отправлен в группу")
 
 
-# =============================
-# ===== CALLBACK ROUTER =======
-# =============================
+# =========================
+# CALLBACK ROUTER
+# =========================
 
 async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -332,9 +352,9 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_report(update, context)
 
 
-# =============================
-# ===== ЗАПУСК =================
-# =============================
+# =========================
+# ЗАПУСК
+# =========================
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
@@ -343,6 +363,9 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(CallbackQueryHandler(callbacks))
+
+    # запускаем сервер для Render
+    threading.Thread(target=run_dummy_server).start()
 
     app.run_polling()
 
