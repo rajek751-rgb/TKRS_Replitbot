@@ -1,7 +1,6 @@
 import os
 import json
 import threading
-import asyncio
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -16,18 +15,16 @@ from telegram.ext import (
 )
 
 # =========================
-# TOKEN
+# BOT TOKEN
 # =========================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN не найден в Environment Variables")
-
-print("TOKEN загружен")
+    raise ValueError("BOT_TOKEN не установлен")
 
 # =========================
-# DUMMY SERVER (для Render)
+# DUMMY SERVER (для Web Service)
 # =========================
 
 class DummyHandler(BaseHTTPRequestHandler):
@@ -36,15 +33,10 @@ class DummyHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot is running")
 
-    def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
-
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), DummyHandler)
-    print(f"Dummy server запущен на порту {port}")
     server.serve_forever()
 
 
@@ -91,7 +83,8 @@ EQUIPMENT_LIST = [
     "АХО", "ППУ", "Цементосмеситель",
     "Автокран", "Звено глушения",
     "Звено СКБ", "Тягач",
-    "Седельный тягач", "АЗА",
+    "Седельный тягач",
+    "АЗА",
     "Седельный тягач с КМУ",
     "Бортовой с КМУ",
     "Топливозаправщик",
@@ -152,7 +145,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# ЭТАП 2
+# ЭТАП 2 — МЕНЮ
 # =========================
 
 async def show_stage2_menu(message):
@@ -165,6 +158,10 @@ async def show_stage2_menu(message):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+
+# =========================
+# ДОБАВИТЬ ОПЕРАЦИЮ
+# =========================
 
 async def add_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -183,16 +180,20 @@ async def add_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# ЗАЯВКИ
+# МЕНЮ ЗАЯВКИ
 # =========================
 
 def build_request_keyboard(context):
     op = context.user_data["op"]
 
+    eq_mark = " ✅" if op["equipment"] else ""
+    rep_mark = " ✅" if op["representative"] else ""
+    mat_mark = " ✅" if op["materials"] else ""
+
     keyboard = [
-        [InlineKeyboardButton("🚜 Техника", callback_data="req_equipment")],
-        [InlineKeyboardButton("👤 Представитель", callback_data="req_rep")],
-        [InlineKeyboardButton("🧰 Материалы", callback_data="req_materials")],
+        [InlineKeyboardButton(f"🚜 Техника{eq_mark}", callback_data="req_equipment")],
+        [InlineKeyboardButton(f"👤 Представитель{rep_mark}", callback_data="req_rep")],
+        [InlineKeyboardButton(f"🧰 Материалы{mat_mark}", callback_data="req_materials")],
         [InlineKeyboardButton("💾 Сохранить операцию", callback_data="save_operation")]
     ]
 
@@ -254,7 +255,7 @@ async def toggle_equipment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# СОХРАНЕНИЕ ОПЕРАЦИИ
+# СОХРАНИТЬ ОПЕРАЦИЮ
 # =========================
 
 async def save_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -270,7 +271,7 @@ async def save_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# ОТПРАВКА
+# ОТПРАВКА ОТЧЁТА
 # =========================
 
 async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -280,7 +281,10 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     if not GROUP_ID:
-        await query.edit_message_text("Бот не знает ID группы.")
+        await query.edit_message_text(
+            "Бот ещё не получил ID группы.\n"
+            "Напишите любое сообщение в группе."
+        )
         return
 
     report = context.user_data["report"]
@@ -308,11 +312,11 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     await context.bot.send_message(chat_id=GROUP_ID, text=text)
-    await query.edit_message_text("📤 Отчёт отправлен")
+    await query.edit_message_text("📤 Отчёт отправлен в группу")
 
 
 # =========================
-# CALLBACK
+# CALLBACK ROUTER
 # =========================
 
 async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -349,25 +353,22 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# MAIN
+# ЗАПУСК
 # =========================
 
-async def main():
-    print("БОТ ЗАПУСКАЕТСЯ")
-
+def main():
     app = Application.builder().token(BOT_TOKEN).build()
-
-    await app.bot.delete_webhook(drop_pending_updates=True)
 
     app.add_handler(MessageHandler(filters.ALL, capture_group), group=0)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(CallbackQueryHandler(callbacks))
 
-    print("Polling запущен")
-    await app.run_polling()
+    # запускаем сервер для Render
+    threading.Thread(target=run_dummy_server).start()
+
+    app.run_polling()
 
 
 if __name__ == "__main__":
-    threading.Thread(target=run_dummy_server).start()
-    asyncio.run(main())
+    main()
