@@ -77,6 +77,51 @@ def init_db():
 app = Application.builder().token(BOT_TOKEN).build()
 
 # =========================
+# HELPER: RENDER REPORT
+# =========================
+async def render_report(report_id, message):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT brigade, report_number, report_date, well_field
+        FROM reports WHERE id=%s
+    """, (report_id,))
+    row = cur.fetchone()
+    if not row:
+        await message.reply_text("Отчёт не найден")
+        conn.close()
+        return
+
+    brigade, number, date, well = row
+
+    cur.execute("""
+        SELECT operation_date, start_time, end_time,
+               name, request_number, equipment,
+               representative, materials
+        FROM operations
+        WHERE report_id=%s
+        ORDER BY operation_date, start_time
+    """, (report_id,))
+    ops = cur.fetchall()
+    conn.close()
+
+    text = f"📑 Отчёт №{number}\n\n📌 Сетевой график\nБригада: {brigade}\nОбъект: {well}\nДата отчёта: {date.strftime('%d.%m.%Y')}\n──────────────\n"
+
+    current_date = None
+    for op_date, start, end, name, req, eq, rep, mat in ops:
+        if op_date != current_date:
+            current_date = op_date
+            text += f"\n📅 {op_date.strftime('%d.%m.%Y')}\n\n"
+        text += f"🔹 {start.strftime('%H:%M')}–{end.strftime('%H:%M')} | {name}\n   📄 Заявка №{req}\n   🚜 {eq}\n   👷 {rep}\n   📦 {mat}\n\n"
+
+    keyboard = [
+        [InlineKeyboardButton("➕ Добавить операцию", callback_data=f"add_{report_id}")],
+        [InlineKeyboardButton("📜 Журнал изменений", callback_data=f"log_{report_id}")],
+        [InlineKeyboardButton("🔄 Новый график", callback_data="new")]
+    ]
+    await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+# =========================
 # TELEGRAM HANDLERS
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -86,15 +131,134 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# Здесь можно добавить остальные handlers: new_report, handle_message, open_report, add_operation, show_log
-# Я оставляю их как в твоём предыдущем коде, просто подставь сюда
+async def new_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Введите номер бригады:")
+    context.user_data["state"] = "brigade"
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state = context.user_data.get("state")
+
+    # === CREATE REPORT FLOW ===
+    if state == "brigade":
+        context.user_data["brigade"] = update.message.text
+        await update.message.reply_text("Введите дату отчёта (ДД.ММ.ГГГГ):")
+        context.user_data["state"] = "date"
+    elif state == "date":
+        context.user_data["date"] = datetime.strptime(update.message.text, "%d.%m.%Y").date()
+        await update.message.reply_text("Введите скважина / месторождение:")
+        context.user_data["state"] = "well"
+    elif state == "well":
+        brigade = context.user_data["brigade"]
+        report_date = context.user_data["date"]
+        well = update.message.text
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT COALESCE(MAX(report_number),0)+1 FROM reports WHERE brigade=%s", (brigade,))
+        number = cur.fetchone()[0]
+        cur.execute("""
+            INSERT INTO reports (brigade, report_number, report_date, well_field, created_by)
+            VALUES (%s,%s,%s,%s,%s) RETURNING id
+        """, (brigade, number, report_date, well, update.effective_user.id))
+        report_id = cur.fetchone()[0]
+        conn.commit()
+        conn.close()
+        context.user_data.clear()
+        keyboard = [[InlineKeyboardButton("Открыть отчёт", callback_data=f"open_{report_id}")]]
+        await update.message.reply_text(f"✅ Отчёт №{number} создан", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    # === ADD OPERATION FLOW ===
+    elif state == "op_date":
+        context.user_data["op_date"] = datetime.strptime(update.message.text, "%d.%m.%Y").date()
+        await update.message.reply_text("Время начала (ЧЧ:ММ):")
+        context.user_data["state"] = "op_start"
+    elif state == "op_start":
+        context.user_data["op_start"] = update.message.text
+        await update.message.reply_text("Время окончания (ЧЧ:ММ):")
+        context.user_data["state"] = "op_end"
+    elif state == "op_end":
+        context.user_data["op_end"] = update.message.text
+        await update.message.reply_text("Название операции:")
+        context.user_data["state"] = "op_name"
+    elif state == "op_name":
+        context.user_data["op_name"] = update.message.text
+        await update.message.reply_text("Номер заявки:")
+        context.user_data["state"] = "op_req"
+    elif state == "op_req":
+        context.user_data["op_req"] = update.message.text
+        await update.message.reply_text("Техника:")
+        context.user_data["state"] = "op_eq"
+    elif state == "op_eq":
+        context.user_data["op_eq"] = update.message.text
+        await update.message.reply_text("Представитель:")
+        context.user_data["state"] = "op_rep"
+    elif state == "op_rep":
+        context.user_data["op_rep"] = update.message.text
+        await update.message.reply_text("Материалы:")
+        context.user_data["state"] = "op_mat"
+    elif state == "op_mat":
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO operations
+            (report_id, operation_date, start_time, end_time, name, request_number, equipment, representative, materials)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (
+            context.user_data["report_id"],
+            context.user_data["op_date"],
+            context.user_data["op_start"],
+            context.user_data["op_end"],
+            context.user_data["op_name"],
+            context.user_data["op_req"],
+            context.user_data["op_eq"],
+            context.user_data["op_rep"],
+            update.message.text
+        ))
+        conn.commit()
+        conn.close()
+        report_id = context.user_data["report_id"]
+        context.user_data.clear()
+        await render_report(report_id, update.message)
 
 # =========================
-# ADD HANDLERS
+# CALLBACK HANDLERS
+# =========================
+async def open_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    report_id = int(query.data.split("_")[1])
+    await render_report(report_id, query.message)
+
+async def add_operation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    report_id = int(query.data.split("_")[1])
+    context.user_data["report_id"] = report_id
+    context.user_data["state"] = "op_date"
+    await query.edit_message_text("Введите дату операции (ДД.ММ.ГГГГ):")
+
+async def show_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    report_id = int(query.data.split("_")[1])
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT action, timestamp FROM change_log WHERE report_id=%s ORDER BY timestamp DESC", (report_id,))
+    logs = cur.fetchall()
+    conn.close()
+    text = "📜 Журнал изменений\n\n" + "\n".join([f"{ts.strftime('%d.%m %H:%M')} | {action}" for action, action_ts in logs])
+    await query.edit_message_text(text)
+
+# =========================
+# ADD HANDLERS TO APP
 # =========================
 app.add_handler(CommandHandler("start", start))
-# app.add_handler(CallbackQueryHandler(...))  # остальные callback handlers
-# app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+app.add_handler(CallbackQueryHandler(new_report, pattern="new"))
+app.add_handler(CallbackQueryHandler(open_report, pattern="open_"))
+app.add_handler(CallbackQueryHandler(add_operation, pattern="add_"))
+app.add_handler(CallbackQueryHandler(show_log, pattern="log_"))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 # =========================
 # FLASK WEBHOOK
@@ -103,12 +267,9 @@ flask_app = Flask(__name__)
 
 @flask_app.post(WEBHOOK_PATH)
 def webhook():
-    try:
-        data = request.get_json(force=True)
-        update = Update.de_json(data, app.bot)
-        asyncio.run(app.process_update(update))
-    except Exception as e:
-        print("Webhook error:", e)
+    data = request.get_json(force=True)
+    update = Update.de_json(data, app.bot)
+    asyncio.run(app.process_update(update))
     return "ok"
 
 @flask_app.get("/")
@@ -119,17 +280,10 @@ def health():
 # MAIN
 # =========================
 if __name__ == "__main__":
-    # 1. Создаём таблицы
     init_db()
-
-    # 2. Инициализация бота
     asyncio.run(app.initialize())
     asyncio.run(app.start())
-
-    # 3. Устанавливаем webhook
     webhook_url = f"{RENDER_URL}{WEBHOOK_PATH}"
     asyncio.run(app.bot.set_webhook(webhook_url))
     print("Webhook установлен:", webhook_url)
-
-    # 4. Запускаем Flask
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
