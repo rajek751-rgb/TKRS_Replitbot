@@ -359,10 +359,12 @@ flask_app = Flask(__name__)
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 
 @flask_app.post(WEBHOOK_PATH)
-async def webhook():
+def webhook():
     data = request.get_json(force=True)
     update = Update.de_json(data, app.bot)
-    await app.process_update(update)
+
+    asyncio.run(app.process_update(update))
+
     return "ok"
 
 @flask_app.get("/")
