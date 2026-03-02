@@ -4,6 +4,10 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 
 TOKEN = os.environ.get("BOT_TOKEN")
 
+if not TOKEN:
+    raise ValueError("BOT_TOKEN не установлен!")
+
+# -------- /start --------
 async def start(update, context):
     keyboard = [["Меню 📋", "Помощь ℹ️"]]
     markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -13,6 +17,7 @@ async def start(update, context):
         reply_markup=markup
     )
 
+# -------- текст --------
 async def handle_text(update, context):
     text = update.message.text
 
@@ -36,6 +41,7 @@ async def handle_text(update, context):
     else:
         await update.message.reply_text(f"Ты написал: {text}")
 
+# -------- inline кнопки --------
 async def button_handler(update, context):
     query = update.callback_query
     await query.answer()
@@ -45,6 +51,7 @@ async def button_handler(update, context):
     elif query.data == "btn2":
         await query.edit_message_text("Нажата кнопка 2 ✅")
 
+# -------- запуск --------
 def main():
     app = Application.builder().token(TOKEN).build()
 
