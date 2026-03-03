@@ -1,164 +1,154 @@
 import os
 import asyncio
+import logging
 import psycopg2
-from datetime import datetime
 from flask import Flask, request
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from threading import Thread
+
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
-    CallbackQueryHandler,
     MessageHandler,
     ContextTypes,
     filters,
 )
 
 # =========================
-# CONFIG
+# НАСТРОЙКИ
 # =========================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
+
+TOKEN = os.getenv("BOT_TOKEN")
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-if not BOT_TOKEN or not DATABASE_URL or not RENDER_URL:
-    raise ValueError("BOT_TOKEN, DATABASE_URL и RENDER_EXTERNAL_URL должны быть заданы!")
+if not TOKEN:
+    raise ValueError("BOT_TOKEN не установлен!")
 
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+if not RENDER_URL:
+    raise ValueError("RENDER_EXTERNAL_URL не установлен!")
+
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL не установлен!")
+
+WEBHOOK_PATH = f"/webhook/{TOKEN}"
+
+logging.basicConfig(level=logging.INFO)
 
 # =========================
-# DATABASE
+# БАЗА ДАННЫХ
 # =========================
-def get_db():
+
+def get_connection():
     return psycopg2.connect(DATABASE_URL)
 
 def init_db():
-    conn = get_db()
+    conn = get_connection()
     cur = conn.cursor()
-
     cur.execute("""
         CREATE TABLE IF NOT EXISTS reports (
             id SERIAL PRIMARY KEY,
-            brigade TEXT NOT NULL,
-            report_number INTEGER NOT NULL,
-            report_date DATE NOT NULL,
-            well_field TEXT NOT NULL,
-            created_by BIGINT,
+            user_id BIGINT,
+            username TEXT,
+            message TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS operations (
-            id SERIAL PRIMARY KEY,
-            report_id INTEGER REFERENCES reports(id) ON DELETE CASCADE,
-            operation_date DATE,
-            start_time TIME,
-            end_time TIME,
-            name TEXT,
-            request_number TEXT,
-            equipment TEXT,
-            representative TEXT,
-            materials TEXT
-        );
-    """)
-
     conn.commit()
+    cur.close()
     conn.close()
 
-# =========================
-# TELEGRAM APP
-# =========================
-app = Application.builder().token(BOT_TOKEN).build()
+def save_report(user_id, username, message):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO reports (user_id, username, message) VALUES (%s, %s, %s)",
+        (user_id, username, message),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def get_all_reports():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT username, message, created_at FROM reports ORDER BY created_at DESC")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return rows
 
 # =========================
-# HANDLERS
+# TELEGRAM
 # =========================
+
+app = Application.builder().token(TOKEN).build()
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("📑 Новый график", callback_data="new")]]
     await update.message.reply_text(
-        "🏗 Корпоративная система ТКРС",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        "👋 Привет!\n\n"
+        "Отправь сообщение — я сохраню его как отчёт.\n\n"
+        "Команды:\n"
+        "/reports — показать все отчёты"
     )
 
-async def new_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("Введите номер бригады:")
-    context.user_data["state"] = "brigade"
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    state = context.user_data.get("state")
+    user = update.effective_user
+    text = update.message.text
 
-    if state == "brigade":
-        context.user_data["brigade"] = update.message.text
-        await update.message.reply_text("Введите дату отчёта (ДД.ММ.ГГГГ):")
-        context.user_data["state"] = "date"
+    save_report(
+        user_id=user.id,
+        username=user.username or user.first_name,
+        message=text,
+    )
 
-    elif state == "date":
-        context.user_data["date"] = datetime.strptime(
-            update.message.text, "%d.%m.%Y"
-        ).date()
-        await update.message.reply_text("Введите скважина / месторождение:")
-        context.user_data["state"] = "well"
+    await update.message.reply_text("✅ Отчёт сохранён!")
 
-    elif state == "well":
-        brigade = context.user_data["brigade"]
-        report_date = context.user_data["date"]
-        well = update.message.text
+async def reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = get_all_reports()
 
-        conn = get_db()
-        cur = conn.cursor()
+    if not rows:
+        await update.message.reply_text("Отчётов пока нет.")
+        return
 
-        cur.execute("""
-            SELECT COALESCE(MAX(report_number),0)+1
-            FROM reports WHERE brigade=%s
-        """, (brigade,))
-        number = cur.fetchone()[0]
+    text = "📊 Последние отчёты:\n\n"
 
-        cur.execute("""
-            INSERT INTO reports
-            (brigade, report_number, report_date, well_field, created_by)
-            VALUES (%s,%s,%s,%s,%s)
-        """, (
-            brigade,
-            number,
-            report_date,
-            well,
-            update.effective_user.id
-        ))
+    for username, message, created_at in rows[:20]:
+        text += f"👤 {username}\n📝 {message}\n🕒 {created_at}\n\n"
 
-        conn.commit()
-        conn.close()
-        context.user_data.clear()
+    await update.message.reply_text(text)
 
-        await update.message.reply_text(f"✅ Отчёт №{number} создан")
-
-# Регистрируем обработчики
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(new_report, pattern="new"))
+app.add_handler(CommandHandler("reports", reports))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 # =========================
-# FLASK WEBHOOK
+# EVENT LOOP (фикс Render)
 # =========================
+
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
+# =========================
+# FLASK
+# =========================
+
 flask_app = Flask(__name__)
-
-@flask_app.route(WEBHOOK_PATH, methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), app.bot)
-
-    # Используем существующий event loop Telegram
-    asyncio.run(app.process_update(update))
-
-    return "ok"
 
 @flask_app.route("/")
 def health():
     return "Bot is running"
 
+@flask_app.route(WEBHOOK_PATH, methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), app.bot)
+    loop.create_task(app.process_update(update))
+    return "ok"
+
 # =========================
 # MAIN
 # =========================
+
 async def main():
     init_db()
     await app.initialize()
@@ -166,10 +156,13 @@ async def main():
 
     webhook_url = f"{RENDER_URL}{WEBHOOK_PATH}"
     await app.bot.set_webhook(webhook_url)
+
     print("Webhook установлен:", webhook_url)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    loop.create_task(main())
+
+    Thread(target=loop.run_forever, daemon=True).start()
 
     flask_app.run(
         host="0.0.0.0",
