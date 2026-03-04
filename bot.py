@@ -1,19 +1,20 @@
 import os
-import logging
+import requests
 import psycopg2
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
-
-logging.basicConfig(level=logging.INFO)
+from flask import Flask, request
 
 TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not TOKEN:
+    raise ValueError("BOT_TOKEN не установлен")
+
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL не установлен")
+
+API_URL = f"https://api.telegram.org/bot{TOKEN}"
+
+app = Flask(__name__)
 
 # =========================
 # DATABASE
@@ -49,50 +50,77 @@ def save_report(user_id, username, message):
     cur.close()
     conn.close()
 
-def get_all_reports():
+def get_reports():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT username, message, created_at FROM reports ORDER BY created_at DESC")
+    cur.execute("SELECT username, message, created_at FROM reports ORDER BY created_at DESC LIMIT 20")
     rows = cur.fetchall()
     cur.close()
     conn.close()
     return rows
 
 # =========================
-# HANDLERS
+# TELEGRAM SEND
 # =========================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Привет!\n\n"
-        "Отправь сообщение — я сохраню его как отчёт.\n"
-        "/reports — показать отчёты"
+def send_message(chat_id, text):
+    requests.post(
+        f"{API_URL}/sendMessage",
+        json={
+            "chat_id": chat_id,
+            "text": text
+        }
     )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    text = update.message.text
+# =========================
+# ROUTES
+# =========================
 
-    save_report(
-        user_id=user.id,
-        username=user.username or user.first_name,
-        message=text,
-    )
+@app.route("/")
+def home():
+    return "Bot is running"
 
-    await update.message.reply_text("✅ Отчёт сохранён!")
+@app.route(f"/webhook/{TOKEN}", methods=["POST"])
+def webhook():
+    data = request.get_json()
 
-async def reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rows = get_all_reports()
+    if "message" not in data:
+        return "ok"
 
-    if not rows:
-        await update.message.reply_text("Отчётов пока нет.")
-        return
+    message = data["message"]
+    chat_id = message["chat"]["id"]
+    text = message.get("text", "")
+    user = message["from"]
 
-    text = "📊 Последние отчёты:\n\n"
-    for username, message, created_at in rows[:20]:
-        text += f"👤 {username}\n📝 {message}\n🕒 {created_at}\n\n"
+    if text == "/start":
+        send_message(
+            chat_id,
+            "👋 Привет!\n\n"
+            "Отправь сообщение — я сохраню его как отчёт.\n"
+            "/reports — показать отчёты"
+        )
 
-    await update.message.reply_text(text)
+    elif text == "/reports":
+        rows = get_reports()
+
+        if not rows:
+            send_message(chat_id, "Отчётов пока нет.")
+        else:
+            response = "📊 Последние отчёты:\n\n"
+            for username, message_text, created_at in rows:
+                response += f"👤 {username}\n📝 {message_text}\n🕒 {created_at}\n\n"
+
+            send_message(chat_id, response)
+
+    elif text:
+        save_report(
+            user_id=user["id"],
+            username=user.get("username", user.get("first_name")),
+            message=text
+        )
+        send_message(chat_id, "✅ Отчёт сохранён!")
+
+    return "ok"
 
 # =========================
 # MAIN
@@ -101,12 +129,10 @@ async def reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == "__main__":
     init_db()
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    # Устанавливаем webhook автоматически
+    webhook_url = os.getenv("RENDER_EXTERNAL_URL") + f"/webhook/{TOKEN}"
+    requests.post(f"{API_URL}/setWebhook", json={"url": webhook_url})
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("reports", reports))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    print("Webhook установлен:", webhook_url)
 
-    print("Бот запущен (long polling)...")
-
-    app.run_polling()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
