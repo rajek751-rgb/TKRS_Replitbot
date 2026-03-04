@@ -83,6 +83,8 @@ def home():
 @app.route(f"/webhook/{TOKEN}", methods=["POST"])
 def webhook():
     data = request.get_json()
+    
+print(data)
 
     if "message" not in data:
         return "ok"
