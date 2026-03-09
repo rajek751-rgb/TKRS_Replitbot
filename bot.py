@@ -15,7 +15,7 @@ from web import app
 
 from threading import Thread
 
-TOKEN = os.getenv(8641583316:AAHPPA2G8UMlvq-0mSNLqHiFe7-78YPsxkI)
+TOKEN = os.getenv("BOT_TOKEN")
 
 GROUP_ID = -5278691583
 
