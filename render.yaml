@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: report-crm-bot
+    name: report-super-bot
     runtime: python
     buildCommand: ""
     startCommand: python bot.py
