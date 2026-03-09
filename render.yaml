@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: report-crm-bot
+    runtime: python
+    buildCommand: ""
+    startCommand: python bot.py
