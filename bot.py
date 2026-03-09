@@ -16,7 +16,7 @@ from database import cursor,conn
 from web import app
 
 TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = -100000000000
+GROUP_ID = -5278691583
 ADMIN_ID = 1754781326
 
 # WEB SERVER
