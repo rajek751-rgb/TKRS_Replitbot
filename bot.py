@@ -17,7 +17,7 @@ from web import app
 
 TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = -100000000000
-ADMIN_ID = 123456789
+ADMIN_ID = 1754781326
 
 # WEB SERVER
 def run_web():
