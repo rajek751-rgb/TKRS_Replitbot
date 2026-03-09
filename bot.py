@@ -1,140 +1,217 @@
 import os
-import requests
-import psycopg2
-from flask import Flask, request
+from datetime import date, time
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+ApplicationBuilder,
+CommandHandler,
+CallbackQueryHandler,
+MessageHandler,
+ContextTypes,
+filters
+)
+
+from database import cursor, conn
+from web import app
+
+from threading import Thread
 
 TOKEN = os.getenv("BOT_TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
+GROUP_ID = -100000000000
 
-if not TOKEN:
-    raise ValueError("BOT_TOKEN не установлен")
+# WEB SERVER
+def run_web():
+    app.run(host="0.0.0.0", port=10000)
 
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL не установлен")
+Thread(target=run_web, daemon=True).start()
 
-API_URL = f"https://api.telegram.org/bot{TOKEN}"
+# MENU
+def menu():
 
-app = Flask(__name__)
+    keyboard = [
 
-# =========================
-# DATABASE
-# =========================
+        [InlineKeyboardButton("📝 Создать отчёт",callback_data="create")],
 
-def get_connection():
-    return psycopg2.connect(DATABASE_URL)
+        [InlineKeyboardButton("📊 Мой отчёт",callback_data="my")],
 
-def init_db():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS reports (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            username TEXT,
-            message TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
+        [InlineKeyboardButton("📈 Статистика",callback_data="stat")]
 
-def save_report(user_id, username, message):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO reports (user_id, username, message) VALUES (%s, %s, %s)",
-        (user_id, username, message),
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+    ]
 
-def get_reports():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT username, message, created_at FROM reports ORDER BY created_at DESC LIMIT 20")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+    return InlineKeyboardMarkup(keyboard)
 
-# =========================
-# TELEGRAM SEND
-# =========================
+# START
+async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
-def send_message(chat_id, text):
-    requests.post(
-        f"{API_URL}/sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": text
-        }
+    await update.message.reply_text(
+        "📊 Report CRM Bot",
+        reply_markup=menu()
     )
 
-# =========================
-# ROUTES
-# =========================
+# BUTTONS
+async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
-@app.route("/")
-def home():
-    return "Bot is running"
+    query = update.callback_query
+    await query.answer()
 
-@app.route(f"/webhook/{TOKEN}", methods=["POST"])
-def webhook():
-    data = request.get_json()
-    
-print(data)
+    if query.data=="create":
 
-    if "message" not in data:
-        return "ok"
+        context.user_data["state"]="done"
 
-    message = data["message"]
-    chat_id = message["chat"]["id"]
-    text = message.get("text", "")
-    user = message["from"]
-
-    if text == "/start":
-        send_message(
-            chat_id,
-            "👋 Привет!\n\n"
-            "Отправь сообщение — я сохраню его как отчёт.\n"
-            "/reports — показать отчёты"
+        await query.message.reply_text(
+            "Что сделали сегодня?"
         )
 
-    elif text == "/reports":
-        rows = get_reports()
+    elif query.data=="my":
 
-        if not rows:
-            send_message(chat_id, "Отчётов пока нет.")
-        else:
-            response = "📊 Последние отчёты:\n\n"
-            for username, message_text, created_at in rows:
-                response += f"👤 {username}\n📝 {message_text}\n🕒 {created_at}\n\n"
+        today=str(date.today())
 
-            send_message(chat_id, response)
-
-    elif text:
-        save_report(
-            user_id=user["id"],
-            username=user.get("username", user.get("first_name")),
-            message=text
+        cursor.execute(
+        "SELECT done,problems,plan FROM reports WHERE user_id=? AND date=?",
+        (query.from_user.id,today)
         )
-        send_message(chat_id, "✅ Отчёт сохранён!")
 
-    return "ok"
+        r=cursor.fetchone()
 
-# =========================
-# MAIN
-# =========================
+        if not r:
 
-if __name__ == "__main__":
-    init_db()
+            await query.message.reply_text("Нет отчёта")
 
-    # Устанавливаем webhook автоматически
-    webhook_url = os.getenv("RENDER_EXTERNAL_URL") + f"/webhook/{TOKEN}"
-    requests.post(f"{API_URL}/setWebhook", json={"url": webhook_url})
+            return
 
-    print("Webhook установлен:", webhook_url)
+        text=f"""
+📊 Ваш отчёт
 
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+✅ Сделано
+{r[0]}
+
+⚠️ Проблемы
+{r[1]}
+
+📅 План
+{r[2]}
+"""
+
+        await query.message.reply_text(text)
+
+    elif query.data=="stat":
+
+        cursor.execute(
+        "SELECT COUNT(*) FROM reports WHERE user_id=?",
+        (query.from_user.id,)
+        )
+
+        total=cursor.fetchone()[0]
+
+        await query.message.reply_text(
+        f"📈 Всего отчётов: {total}"
+        )
+
+# TEXT
+async def messages(update:Update,context:ContextTypes.DEFAULT_TYPE):
+
+    state=context.user_data.get("state")
+
+    if not state:
+        return
+
+    user=update.effective_user
+
+    if state=="done":
+
+        context.user_data["done"]=update.message.text
+        context.user_data["state"]="problems"
+
+        await update.message.reply_text("Какие проблемы?")
+
+    elif state=="problems":
+
+        context.user_data["problems"]=update.message.text
+        context.user_data["state"]="plan"
+
+        await update.message.reply_text("План на завтра?")
+
+    elif state=="plan":
+
+        done=context.user_data["done"]
+        problems=context.user_data["problems"]
+        plan=update.message.text
+
+        today=str(date.today())
+
+        cursor.execute("""
+        INSERT INTO reports
+        (user_id,username,date,done,problems,plan)
+        VALUES (?,?,?,?,?,?)
+        """,(user.id,user.username,today,done,problems,plan))
+
+        conn.commit()
+
+        text=f"""
+📊 Отчёт
+
+✅ Сделано
+{done}
+
+⚠️ Проблемы
+{problems}
+
+📅 План
+{plan}
+
+👤 @{user.username}
+"""
+
+        await context.bot.send_message(
+        chat_id=GROUP_ID,
+        text=text
+        )
+
+        await update.message.reply_text(
+        "✅ Отчёт отправлен"
+        )
+
+        context.user_data["state"]=None
+
+# REMINDER
+async def reminder(context:ContextTypes.DEFAULT_TYPE):
+
+    await context.bot.send_message(
+    chat_id=GROUP_ID,
+    text="⏰ Напоминание отправить отчёты"
+    )
+
+# SUMMARY
+async def summary(context:ContextTypes.DEFAULT_TYPE):
+
+    today=str(date.today())
+
+    cursor.execute(
+    "SELECT username FROM reports WHERE date=?",
+    (today,)
+    )
+
+    users=cursor.fetchall()
+
+    text="📊 Отчёты сегодня\n\n"
+
+    for u in users:
+        text+=f"@{u[0]} ✅\n"
+
+    await context.bot.send_message(
+    chat_id=GROUP_ID,
+    text=text
+    )
+
+# BOT
+app_bot = ApplicationBuilder().token(TOKEN).build()
+
+app_bot.add_handler(CommandHandler("start",start))
+app_bot.add_handler(CallbackQueryHandler(buttons))
+app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,messages))
+
+app_bot.job_queue.run_daily(reminder,time=time(hour=18))
+app_bot.job_queue.run_daily(summary,time=time(hour=19))
+
+print("BOT STARTED")
+
+app_bot.run_polling()
