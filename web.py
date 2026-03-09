@@ -4,7 +4,7 @@ from database import cursor
 app = Flask(__name__)
 
 @app.route("/")
-def panel():
+def home():
 
     cursor.execute("""
     SELECT username,date,done,problems,plan
@@ -15,7 +15,7 @@ def panel():
 
     rows = cursor.fetchall()
 
-    html = "<h2>📊 Reports CRM</h2><table border=1>"
+    html = "<h2>📊 Team Reports</h2><table border=1>"
 
     html += "<tr><th>User</th><th>Date</th><th>Done</th><th>Problems</th><th>Plan</th></tr>"
 
