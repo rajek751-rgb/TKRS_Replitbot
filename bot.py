@@ -1,6 +1,8 @@
 import os
-from datetime import date, time
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from datetime import date,time
+from threading import Thread
+
+from telegram import InlineKeyboardButton,InlineKeyboardMarkup,Update
 from telegram.ext import (
 ApplicationBuilder,
 CommandHandler,
@@ -10,27 +12,25 @@ ContextTypes,
 filters
 )
 
-from database import cursor, conn
+from database import cursor,conn
 from web import app
 
-from threading import Thread
-
 TOKEN = os.getenv("BOT_TOKEN")
-
-GROUP_ID = -5278691583
+GROUP_ID = -100000000000
+ADMIN_ID = 123456789
 
 # WEB SERVER
 def run_web():
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0",port=10000)
 
-Thread(target=run_web, daemon=True).start()
+Thread(target=run_web,daemon=True).start()
 
 # MENU
 def menu():
 
-    keyboard = [
+    keyboard=[
 
-        [InlineKeyboardButton("📝 Создать отчёт",callback_data="create")],
+        [InlineKeyboardButton("📝 Новый отчёт",callback_data="new")],
 
         [InlineKeyboardButton("📊 Мой отчёт",callback_data="my")],
 
@@ -44,23 +44,21 @@ def menu():
 async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
-        "📊 Report CRM Bot",
+        "📊 SUPER Report Bot",
         reply_markup=menu()
     )
 
 # BUTTONS
 async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
-    query = update.callback_query
+    query=update.callback_query
     await query.answer()
 
-    if query.data=="create":
+    if query.data=="new":
 
         context.user_data["state"]="done"
 
-        await query.message.reply_text(
-            "Что сделали сегодня?"
-        )
+        await query.message.reply_text("Что сделали сегодня?")
 
     elif query.data=="my":
 
@@ -75,7 +73,7 @@ async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
         if not r:
 
-            await query.message.reply_text("Нет отчёта")
+            await query.message.reply_text("Отчёта сегодня нет")
 
             return
 
@@ -107,7 +105,7 @@ async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
         f"📈 Всего отчётов: {total}"
         )
 
-# TEXT
+# FORM
 async def messages(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
     state=context.user_data.get("state")
@@ -122,7 +120,7 @@ async def messages(update:Update,context:ContextTypes.DEFAULT_TYPE):
         context.user_data["done"]=update.message.text
         context.user_data["state"]="problems"
 
-        await update.message.reply_text("Какие проблемы?")
+        await update.message.reply_text("Есть проблемы?")
 
     elif state=="problems":
 
@@ -167,9 +165,7 @@ async def messages(update:Update,context:ContextTypes.DEFAULT_TYPE):
         text=text
         )
 
-        await update.message.reply_text(
-        "✅ Отчёт отправлен"
-        )
+        await update.message.reply_text("✅ Отчёт отправлен")
 
         context.user_data["state"]=None
 
@@ -178,7 +174,7 @@ async def reminder(context:ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_message(
     chat_id=GROUP_ID,
-    text="⏰ Напоминание отправить отчёты"
+    text="⏰ Не забудьте отправить отчёт"
     )
 
 # SUMMARY
@@ -193,7 +189,7 @@ async def summary(context:ContextTypes.DEFAULT_TYPE):
 
     users=cursor.fetchall()
 
-    text="📊 Отчёты сегодня\n\n"
+    text="📊 Итоги дня\n\n"
 
     for u in users:
         text+=f"@{u[0]} ✅\n"
@@ -203,16 +199,40 @@ async def summary(context:ContextTypes.DEFAULT_TYPE):
     text=text
     )
 
+# EXCEL
+async def excel(update:Update,context:ContextTypes.DEFAULT_TYPE):
+
+    if update.effective_user.id!=ADMIN_ID:
+        return
+
+    import pandas as pd
+
+    cursor.execute(
+    "SELECT username,date,done,problems,plan FROM reports"
+    )
+
+    data=cursor.fetchall()
+
+    df=pd.DataFrame(data,columns=["User","Date","Done","Problems","Plan"])
+
+    file="reports.xlsx"
+
+    df.to_excel(file,index=False)
+
+    await update.message.reply_document(open(file,"rb"))
+
 # BOT
-app_bot = ApplicationBuilder().token(TOKEN).build()
+app_bot=ApplicationBuilder().token(TOKEN).build()
 
 app_bot.add_handler(CommandHandler("start",start))
+app_bot.add_handler(CommandHandler("excel",excel))
+
 app_bot.add_handler(CallbackQueryHandler(buttons))
 app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,messages))
 
 app_bot.job_queue.run_daily(reminder,time=time(hour=18))
 app_bot.job_queue.run_daily(summary,time=time(hour=19))
 
-print("BOT STARTED")
+print("SUPER BOT STARTED")
 
 app_bot.run_polling()
