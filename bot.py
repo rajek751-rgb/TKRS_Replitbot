@@ -1,238 +1,190 @@
 import os
-from datetime import date,time
+import sqlite3
+import pandas as pd
+import asyncio
+from datetime import datetime
 from threading import Thread
 
-from telegram import InlineKeyboardButton,InlineKeyboardMarkup,Update
+from flask import Flask
+
+from telegram import Update
 from telegram.ext import (
-ApplicationBuilder,
-CommandHandler,
-CallbackQueryHandler,
-MessageHandler,
-ContextTypes,
-filters
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters,
 )
 
-from database import cursor,conn
-from web import app
-
 TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = -5278691583
-ADMIN_ID = 1754781326
 
-# WEB SERVER
+DONE, PROBLEMS, PLAN = range(3)
+
+# ---------------- DATABASE ----------------
+
+conn = sqlite3.connect("reports.db", check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS reports(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+user_id INTEGER,
+username TEXT,
+date TEXT,
+done TEXT,
+problems TEXT,
+plan TEXT
+)
+""")
+
+conn.commit()
+
+# ---------------- WEB PANEL ----------------
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+
+    cursor.execute("""
+    SELECT username,date,done,problems,plan
+    FROM reports
+    ORDER BY id DESC
+    LIMIT 100
+    """)
+
+    rows = cursor.fetchall()
+
+    html = "<h2>Team Reports</h2><table border=1>"
+    html += "<tr><th>User</th><th>Date</th><th>Done</th><th>Problems</th><th>Plan</th></tr>"
+
+    for r in rows:
+        html += f"""
+        <tr>
+        <td>@{r[0]}</td>
+        <td>{r[1]}</td>
+        <td>{r[2]}</td>
+        <td>{r[3]}</td>
+        <td>{r[4]}</td>
+        </tr>
+        """
+
+    html += "</table>"
+    return html
+
+
 def run_web():
-    app.run(host="0.0.0.0",port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
-Thread(target=run_web,daemon=True).start()
 
-# MENU
-def menu():
+# ---------------- BOT ----------------
 
-    keyboard=[
-
-        [InlineKeyboardButton("📝 Новый отчёт",callback_data="new")],
-
-        [InlineKeyboardButton("📊 Мой отчёт",callback_data="my")],
-
-        [InlineKeyboardButton("📈 Статистика",callback_data="stat")]
-
-    ]
-
-    return InlineKeyboardMarkup(keyboard)
-
-# START
-async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
-        "📊 SUPER Report Bot",
-        reply_markup=menu()
+        "📋 Daily Report\n\nЧто сделал сегодня?"
     )
 
-# BUTTONS
-async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
+    return DONE
 
-    query=update.callback_query
-    await query.answer()
 
-    if query.data=="new":
+async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-        context.user_data["state"]="done"
+    context.user_data["done"] = update.message.text
 
-        await query.message.reply_text("Что сделали сегодня?")
+    await update.message.reply_text(
+        "⚠️ Были проблемы?"
+    )
 
-    elif query.data=="my":
+    return PROBLEMS
 
-        today=str(date.today())
 
-        cursor.execute(
-        "SELECT done,problems,plan FROM reports WHERE user_id=? AND date=?",
-        (query.from_user.id,today)
-        )
+async def problems(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-        r=cursor.fetchone()
+    context.user_data["problems"] = update.message.text
 
-        if not r:
+    await update.message.reply_text(
+        "📅 План на завтра?"
+    )
 
-            await query.message.reply_text("Отчёта сегодня нет")
+    return PLAN
 
-            return
 
-        text=f"""
-📊 Ваш отчёт
+async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-✅ Сделано
-{r[0]}
+    context.user_data["plan"] = update.message.text
 
-⚠️ Проблемы
-{r[1]}
+    user = update.message.from_user
 
-📅 План
-{r[2]}
-"""
-
-        await query.message.reply_text(text)
-
-    elif query.data=="stat":
-
-        cursor.execute(
-        "SELECT COUNT(*) FROM reports WHERE user_id=?",
-        (query.from_user.id,)
-        )
-
-        total=cursor.fetchone()[0]
-
-        await query.message.reply_text(
-        f"📈 Всего отчётов: {total}"
-        )
-
-# FORM
-async def messages(update:Update,context:ContextTypes.DEFAULT_TYPE):
-
-    state=context.user_data.get("state")
-
-    if not state:
-        return
-
-    user=update.effective_user
-
-    if state=="done":
-
-        context.user_data["done"]=update.message.text
-        context.user_data["state"]="problems"
-
-        await update.message.reply_text("Есть проблемы?")
-
-    elif state=="problems":
-
-        context.user_data["problems"]=update.message.text
-        context.user_data["state"]="plan"
-
-        await update.message.reply_text("План на завтра?")
-
-    elif state=="plan":
-
-        done=context.user_data["done"]
-        problems=context.user_data["problems"]
-        plan=update.message.text
-
-        today=str(date.today())
-
-        cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO reports
-        (user_id,username,date,done,problems,plan)
+        (user_id, username, date, done, problems, plan)
         VALUES (?,?,?,?,?,?)
-        """,(user.id,user.username,today,done,problems,plan))
-
-        conn.commit()
-
-        text=f"""
-📊 Отчёт
-
-✅ Сделано
-{done}
-
-⚠️ Проблемы
-{problems}
-
-📅 План
-{plan}
-
-👤 @{user.username}
-"""
-
-        await context.bot.send_message(
-        chat_id=GROUP_ID,
-        text=text
-        )
-
-        await update.message.reply_text("✅ Отчёт отправлен")
-
-        context.user_data["state"]=None
-
-# REMINDER
-async def reminder(context:ContextTypes.DEFAULT_TYPE):
-
-    await context.bot.send_message(
-    chat_id=GROUP_ID,
-    text="⏰ Не забудьте отправить отчёт"
+        """,
+        (
+            user.id,
+            user.username,
+            datetime.now().strftime("%Y-%m-%d"),
+            context.user_data["done"],
+            context.user_data["problems"],
+            context.user_data["plan"],
+        ),
     )
 
-# SUMMARY
-async def summary(context:ContextTypes.DEFAULT_TYPE):
+    conn.commit()
 
-    today=str(date.today())
-
-    cursor.execute(
-    "SELECT username FROM reports WHERE date=?",
-    (today,)
+    await update.message.reply_text(
+        "✅ Отчёт сохранён!"
     )
 
-    users=cursor.fetchall()
+    return ConversationHandler.END
 
-    text="📊 Итоги дня\n\n"
 
-    for u in users:
-        text+=f"@{u[0]} ✅\n"
+# ---------------- EXCEL ----------------
 
-    await context.bot.send_message(
-    chat_id=GROUP_ID,
-    text=text
+async def excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    df = pd.read_sql_query("SELECT * FROM reports", conn)
+
+    file = "reports.xlsx"
+    df.to_excel(file, index=False)
+
+    await update.message.reply_document(
+        document=open(file, "rb")
     )
 
-# EXCEL
-async def excel(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
-    if update.effective_user.id!=ADMIN_ID:
-        return
+# ---------------- MAIN ----------------
 
-    import pandas as pd
+async def main():
 
-    cursor.execute(
-    "SELECT username,date,done,problems,plan FROM reports"
+    app_bot = ApplicationBuilder().token(TOKEN).build()
+
+    conv = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            DONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, done)],
+            PROBLEMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, problems)],
+            PLAN: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan)],
+        },
+        fallbacks=[],
     )
 
-    data=cursor.fetchall()
+    app_bot.add_handler(conv)
+    app_bot.add_handler(CommandHandler("excel", excel))
 
-    df=pd.DataFrame(data,columns=["User","Date","Done","Problems","Plan"])
+    print("BOT STARTED")
 
-    file="reports.xlsx"
+    await app_bot.run_polling()
 
-    df.to_excel(file,index=False)
 
-    await update.message.reply_document(open(file,"rb"))
+# ---------------- RUN ----------------
 
-# BOT
-app_bot=ApplicationBuilder().token(TOKEN).build()
+if __name__ == "__main__":
 
-app_bot.add_handler(CommandHandler("start",start))
-app_bot.add_handler(CommandHandler("excel",excel))
+    Thread(target=run_web).start()
 
-app_bot.add_handler(CallbackQueryHandler(buttons))
-app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,messages))
-
-app_bot.job_queue.run_daily(reminder,time=time(hour=18))
-app_bot.job_queue.run_daily(summary,time=time(hour=19))
-
-print("SUPER BOT STARTED")
-
-app_bot.run_polling()
+    asyncio.run(main())
