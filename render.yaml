@@ -1,6 +1,10 @@
 services:
-  - type: web
-    name: report-super-bot
+  - type: worker
+    name: tkrs-bot
     runtime: python
-    buildCommand: ""
-    startCommand: python bot.py
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
